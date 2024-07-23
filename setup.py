@@ -11,6 +11,6 @@ setup(
     description="Best IQ Option API for python",
     long_description="Best IQ Option API for python",
     url="https://github.com/iqoptionapi/iqoptionapi",
-    author="Rafael Faria",
+    author="Anderson R. Dias",
     zip_safe=False
 )
