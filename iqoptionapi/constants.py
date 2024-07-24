@@ -401,6 +401,7 @@ ACTIVES = {
         "GBPJPY-op": 1866,
         "USNDAQ100-OTC": 1972,
         "Dollar_Index": 2062,
+        "Yen_Index": 2063,
         "INTEL-op": 1928,
         "BAIDU-op": 1911,
         "GOOGLE-op": 1926,
