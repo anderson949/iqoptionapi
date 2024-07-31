@@ -356,8 +356,43 @@ class IQ_Option:
             name = name[name.index(".") + 1:len(name)]
             detail[name]["binary"] = init_info["result"]["binary"]["actives"][actives]
         return detail
-
+        
     def get_all_profit(self):
+        all_profit = nested_dict(2, dict)
+    
+        # Obtém os dados mais recentes
+        init_info = self.get_all_init()
+    
+        if "result" not in init_info or "turbo" not in init_info["result"] or "binary" not in init_info["result"]:
+            raise Exception("Estrutura de dados inesperada em init_info")
+
+        # Processa os dados de opções turbo
+        for actives in init_info["result"]["turbo"]["actives"]:
+            active_info = init_info["result"]["turbo"]["actives"][actives]
+            name = active_info["name"]
+            name = name[name.index(".") + 1:len(name)]
+        
+            if "option" in active_info and "profit" in active_info["option"]:
+                commission = active_info["option"]["profit"].get("commission", 0)
+                all_profit[name]["turbo"] = (100.0 - commission) / 100.0
+            else:
+                all_profit[name]["turbo"] = 0  # Ou qualquer valor padrão
+
+            # Processa os dados de opções binary
+        for actives in init_info["result"]["binary"]["actives"]:
+            active_info = init_info["result"]["binary"]["actives"][actives]
+            name = active_info["name"]
+            name = name[name.index(".") + 1:len(name)]
+        
+            if "option" in active_info and "profit" in active_info["option"]:
+                commission = active_info["option"]["profit"].get("commission", 0)
+                all_profit[name]["binary"] = (100.0 - commission) / 100.0
+            else:
+                all_profit[name]["binary"] = 0  # Ou qualquer valor padrão
+
+        return all_profit  
+    
+    '''def get_all_profit(self):
         all_profit = nested_dict(2, dict)
         init_info = self.get_all_init()
         for actives in init_info["result"]["turbo"]["actives"]:
@@ -375,7 +410,7 @@ class IQ_Option:
                 100.0 -
                 init_info["result"]["binary"]["actives"][actives]["option"]["profit"][
                     "commission"]) / 100.0
-        return all_profit
+        return all_profit'''
 
     # ----------------------------------------
 
