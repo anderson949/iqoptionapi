@@ -357,7 +357,7 @@ class IQ_Option:
             detail[name]["binary"] = init_info["result"]["binary"]["actives"][actives]
         return detail
         
-    def get_all_profit(self):
+    '''def get_all_profit(self):
         all_profit = nested_dict(2, dict)
     
         # Obtém os dados mais recentes
@@ -390,9 +390,9 @@ class IQ_Option:
             else:
                 all_profit[name]["binary"] = 0  # Ou qualquer valor padrão
 
-        return all_profit  
+        return all_profit'''  
     
-    '''def get_all_profit(self):
+    def get_all_profit(self):
         all_profit = nested_dict(2, dict)
         init_info = self.get_all_init()
         for actives in init_info["result"]["turbo"]["actives"]:
@@ -410,7 +410,7 @@ class IQ_Option:
                 100.0 -
                 init_info["result"]["binary"]["actives"][actives]["option"]["profit"][
                     "commission"]) / 100.0
-        return all_profit'''
+        return all_profit
 
     # ----------------------------------------
 
