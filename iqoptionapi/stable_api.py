@@ -391,25 +391,25 @@ class IQ_Option:
                 all_profit[name]["binary"] = 0  # Ou qualquer valor padrão
 
         return all_profit'''  
-    
+
     def get_all_profit(self):
         all_profit = nested_dict(2, dict)
         init_info = self.get_all_init()
+    
         for actives in init_info["result"]["turbo"]["actives"]:
             name = init_info["result"]["turbo"]["actives"][actives]["name"]
             name = name[name.index(".") + 1:len(name)]
-            all_profit[name]["turbo"] = (
-                100.0 -
-                init_info["result"]["turbo"]["actives"][actives]["option"]["profit"][
-                    "commission"]) / 100.0
+            commission = init_info["result"]["turbo"]["actives"][actives]["option"]["profit"]["commission"]
+            commission += 1
+            all_profit[name]["turbo"] = (100.0 - commission) / 100.0
 
         for actives in init_info["result"]["binary"]["actives"]:
             name = init_info["result"]["binary"]["actives"][actives]["name"]
             name = name[name.index(".") + 1:len(name)]
-            all_profit[name]["binary"] = ((
-                100.0 -
-                init_info["result"]["binary"]["actives"][actives]["option"]["profit"][
-                    "commission"]) / 100.0)-1
+            commission = init_info["result"]["binary"]["actives"][actives]["option"]["profit"]["commission"]
+            commission += 1
+            all_profit[name]["binary"] = (100.0 - commission) / 100.0
+
         return all_profit
 
     # ----------------------------------------
