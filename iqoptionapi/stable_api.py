@@ -400,14 +400,14 @@ class IQ_Option:
             name = init_info["result"]["turbo"]["actives"][actives]["name"]
             name = name[name.index(".") + 1:len(name)]
             commission = init_info["result"]["turbo"]["actives"][actives]["option"]["profit"]["commission"]
-            commission += 1
+            commission -= 1
             all_profit[name]["turbo"] = (100.0 - commission) / 100.0
 
         for actives in init_info["result"]["binary"]["actives"]:
             name = init_info["result"]["binary"]["actives"][actives]["name"]
             name = name[name.index(".") + 1:len(name)]
             commission = init_info["result"]["binary"]["actives"][actives]["option"]["profit"]["commission"]
-            commission += 1
+            commission -= 1
             all_profit[name]["binary"] = (100.0 - commission) / 100.0
 
         return all_profit
