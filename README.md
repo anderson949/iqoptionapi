@@ -136,17 +136,17 @@ You must have python installed version 3.7 or higher
 then you must have websocket-client installed on your project
 
 ```python
-pip install websocket-client==0.56
+pip install websocket-client==1.8.0
 ```
 
 Now you can install this project as library:
 
 ```bash
-sudo pip install -U git+git://github.com/iqoptionapi/iqoptionapi.git
+sudo pip install -U git+git://github.com/anderson949/iqoptionapi.git
 
 OR 
 
-pip install -U https://github.com/iqoptionapi/iqoptionapi/archive/refs/heads/master.zip
+pip install -U https://github.com/anderson949/iqoptionapi/archive/refs/heads/master.zip
 ```
 
 ```Python
