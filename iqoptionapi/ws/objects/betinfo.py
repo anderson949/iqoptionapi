@@ -1,10 +1,8 @@
-#python
-"""Module for IQ Option Profile websocket object."""
+
 from iqoptionapi.ws.objects.base import Base
 
 
 class Game_betinfo_data(Base):
-    """Class for IQ Option Profile websocket object."""
 
     def __init__(self):
         super(Game_betinfo_data, self).__init__()
