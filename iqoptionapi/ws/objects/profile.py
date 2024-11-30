@@ -1,9 +1,7 @@
-"""Module for IQ Option Profile websocket object."""
+
 from iqoptionapi.ws.objects.base import Base
 
-
 class Profile(Base):
-    """Class for IQ Option Profile websocket object."""
 
     def __init__(self):
         super(Profile, self).__init__()
