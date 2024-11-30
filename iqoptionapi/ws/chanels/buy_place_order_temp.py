@@ -2,7 +2,6 @@ import datetime
 import time
 from iqoptionapi.ws.chanels.base import Base
 import iqoptionapi.global_value as global_value
-#work for forex digit cfd(stock)
 
 class Buy_place_order_temp(Base):
     name = "sendMessage"
@@ -48,4 +47,55 @@ class Buy_place_order_temp(Base):
             }
         }
         self.send_websocket_request(self.name, data)
- 
+
+class buy_forex(Base):
+    name = "sendMessage"
+    def __call__(self,leverage,par,direcao,valor_entrada,preco_entrada,win,lose):
+
+        data = {
+        "name": "marginal-forex.place-stop-order",
+        "version": "1.0",
+        "body": {
+            "side": str(direcao),
+            "user_balance_id": int(global_value.balance_id),
+            "count": str(valor_entrada),
+            "instrument_id": "mf."+str(par),
+            "instrument_active_id": int(par),
+            "leverage": str(leverage),
+            "stop_price": str(preco_entrada),
+            "take_profit": {
+            "type": "price",
+            "value": str(win)
+            },
+            "stop_loss": {
+            "type": "price",
+            "value": str(lose)
+            }
+        }
+        }
+        self.send_websocket_request(self.name, data)
+
+class cancel_forex(Base):
+    name = "sendMessage"
+    def __call__(self,id):
+
+        data = {
+        "name": "marginal-forex.cancel-pending-order",
+        "version": "1.0",
+        "body": {
+            "order_id": id
+        }
+        }
+        self.send_websocket_request(self.name, data)
+
+class Get_leverage_forex(Base):
+    name = "sendMessage"
+    def __call__(self,):
+
+        data = {
+        "name": "marginal-forex-instruments.get-underlying-list",
+        "version": "1.0",
+        "body": {}
+        }
+
+        self.send_websocket_request(self.name, data)
