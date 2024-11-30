@@ -22,6 +22,22 @@ def nested_dict(n, type):
     else:
         return defaultdict(lambda: nested_dict(n - 1, type))
 
+def timeout_inhibit(max_time):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            start_time = time.time()
+            result = None
+            while True:
+                elapsed_time = time.time() - start_time
+                if elapsed_time > max_time:
+                    logging.warning(f"Função {func.__name__} inibida após {elapsed_time:.2f} segundos.")
+                    return False  # Inibir a execução
+
+                result = func(*args, **kwargs)
+                if result:
+                    return result
+        return wrapper
+    return decorator
 
 class IQ_Option:
     __version__ = api_version
@@ -899,6 +915,7 @@ class IQ_Option:
 
         return self.api.result, self.api.buy_multi_option[req_id]["id"]
 
+    @timeout_inhibit(1)
     def buy(self, price, ACTIVES, ACTION, expirations):
         self.api.buy_multi_option = {}
         self.api.buy_successful = None
