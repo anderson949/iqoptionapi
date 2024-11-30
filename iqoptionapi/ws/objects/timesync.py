@@ -1,4 +1,3 @@
-"""Module for IQ Option TimeSync websocket object."""
 
 import time
 import datetime
@@ -7,8 +6,6 @@ from iqoptionapi.ws.objects.base import Base
 
 
 class TimeSync(Base):
-    """Class for IQ Option TimeSync websocket object."""
-
     def __init__(self):
         super(TimeSync, self).__init__()
         self.__name = "timeSync"
@@ -17,10 +14,7 @@ class TimeSync(Base):
 
     @property
     def server_timestamp(self):
-        """Property to get server timestamp.
 
-        :returns: The server timestamp.
-        """
         while self.__server_timestamp==None:
             time.sleep(0.2)
             pass
