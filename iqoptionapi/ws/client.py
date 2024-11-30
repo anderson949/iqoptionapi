@@ -333,6 +333,3 @@ class WebsocketClient(object):
         logger = logging.getLogger(__name__)
         logger.debug("Websocket connection closed.")
         global_value.check_websocket_if_connect = 0
-
-
-
