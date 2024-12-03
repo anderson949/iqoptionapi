@@ -142,19 +142,12 @@ pip install websocket-client==0.56
 Now you can install this project as library:
 
 ```bash
-sudo pip install -U git+git://github.com/iqoptionapi/iqoptionapi.git
-
-OR 
-
-pip install -U https://github.com/anderson949/iqoptionapi/archive/refs/heads/master.zip
+pip3 install -U https://github.com/anderson949/iqoptionapi/archive/refs/heads/master.zip
 ```
 
 ```Python
 # Alto Nivel
 from iqoptionapi.stable_api import IQ_Option
-
-# Baixo Nivel
-from iqoptionapi.api import IQOptionAPI
 ```
 
 ```bash
