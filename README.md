@@ -146,7 +146,7 @@ sudo pip install -U git+git://github.com/iqoptionapi/iqoptionapi.git
 
 OR 
 
-pip install -U https://github.com/iqoptionapi/iqoptionapi/archive/refs/heads/master.zip
+pip install -U https://github.com/anderson949/iqoptionapi/archive/refs/heads/master.zip
 ```
 
 ```Python
