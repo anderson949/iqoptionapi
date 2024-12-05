@@ -308,7 +308,7 @@ class IQ_Option:
                     name_part = details["name"].split(".")[1]
                     OP_code.ACTIVES[name_part] = int(i) 
 
-    def __get_digital_open(self):
+    '''def __get_digital_open(self):
            # for digital options
            digital_data = self.get_digital_underlying_list_data()["underlying"]
            
@@ -326,7 +326,24 @@ class IQ_Option:
            for item in digital_data:
                underlying_nome = item['underlying']
                active_id_valor = item['active_id']
-               OP_code.ACTIVES[underlying_nome] = active_id_valor    
+               OP_code.ACTIVES[underlying_nome] = active_id_valor '''   
+
+    def __get_digital_open(self):
+        digital_data = self.get_digital_underlying_list_data()["underlying"]
+        current_time = time.time()
+        
+        for digital in digital_data:
+            name = digital["underlying"]
+            schedule = digital["schedule"]
+            
+            is_open = any(schedule_time["open"] < current_time < schedule_time["close"] for schedule_time in schedule)
+            self.OPEN_TIME["digital"][name]["open"] = is_open
+        
+        # Atualize digital actives opcode diretamente no loop anterior
+        for item in digital_data:
+            underlying_nome = item['underlying']
+            active_id_valor = item['active_id']
+            OP_code.ACTIVES[underlying_nome] = active_id_valor
 
     def __get_other_open(self):
         # Crypto and etc pairs
