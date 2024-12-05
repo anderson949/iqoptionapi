@@ -283,7 +283,7 @@ class IQ_Option:
 
     # ------- chek if binary/digit/cfd/stock... if open or not
 
-    def __get_binary_open(self):
+    '''def __get_binary_open(self):
             # for turbo and binary pairs
             binary_data = self.get_all_init_v2()
             binary_list = ["binary", "turbo"]
@@ -306,28 +306,33 @@ class IQ_Option:
                 actives = binary_data[dirr]["actives"]
                 for i, details in actives.items():
                     name_part = details["name"].split(".")[1]
-                    OP_code.ACTIVES[name_part] = int(i) 
-
-    '''def __get_digital_open(self):
-           # for digital options
-           digital_data = self.get_digital_underlying_list_data()["underlying"]
-           
-           for digital in digital_data:
-               name = digital["underlying"]
-               schedule = digital["schedule"]
-               self.OPEN_TIME["digital"][name]["open"] = False
-               for schedule_time in schedule:
-                   start = schedule_time["open"]
-                   end = schedule_time["close"]
-                   if start < time.time() < end:
-                       self.OPEN_TIME["digital"][name]["open"] = True
+                    OP_code.ACTIVES[name_part] = int(i)'''
+                        
+    def __get_binary_open(self):
+        binary_data = self.get_all_init_v2()
+        binary_list = ["binary", "turbo"]
+        
+        if binary_data:
+            for option in binary_list:
+                if option in binary_data and "actives" in binary_data[option]:
+                    actives = binary_data[option]["actives"]
+                    for actives_id, active in actives.items():
+                        name = str(active["name"]).split(".")[1]
+                        if active["enabled"]:
+                            if active["is_suspended"]:
+                                self.OPEN_TIME[option][name]["open"] = False
+                            else:
+                                self.OPEN_TIME[option][name]["open"] = True
+                        else:
+                            self.OPEN_TIME[option][name]["open"] = active["enabled"]
             
-           # update digital actives opcode
-           for item in digital_data:
-               underlying_nome = item['underlying']
-               active_id_valor = item['active_id']
-               OP_code.ACTIVES[underlying_nome] = active_id_valor '''   
-
+            for dirr in ["binary", "turbo"]:
+                actives = binary_data[dirr]["actives"]
+                for i, details in actives.items():
+                    name_part = details["name"].split(".")[1]
+                    OP_code.ACTIVES[name_part] = int(i)                    
+                    
+    #Atualizado
     def __get_digital_open(self):
         digital_data = self.get_digital_underlying_list_data()["underlying"]
         current_time = time.time()
