@@ -284,35 +284,49 @@ class IQ_Option:
     # ------- chek if binary/digit/cfd/stock... if open or not
 
     def __get_binary_open(self):
-        # for turbo and binary pairs
-        binary_data = self.get_all_init_v2()
-        binary_list = ["binary", "turbo"]
-        if binary_data:
-            for option in binary_list:
-                if option in binary_data:
-                    for actives_id in binary_data[option]["actives"]:
-                        active = binary_data[option]["actives"][actives_id]
-                        name = str(active["name"]).split(".")[1]
-                        if active["enabled"] == True:
-                            if active["is_suspended"] == True:
-                                self.OPEN_TIME[option][name]["open"] = False
+            # for turbo and binary pairs
+            binary_data = self.get_all_init_v2()
+            binary_list = ["binary", "turbo"]
+            if binary_data:
+                for option in binary_list:
+                    if option in binary_data:
+                        for actives_id in binary_data[option]["actives"]:
+                            active = binary_data[option]["actives"][actives_id]
+                            name = str(active["name"]).split(".")[1]
+                            if active["enabled"] == True:
+                                if active["is_suspended"] == True:
+                                    self.OPEN_TIME[option][name]["open"] = False
+                                else:
+                                    self.OPEN_TIME[option][name]["open"] = True
                             else:
-                                self.OPEN_TIME[option][name]["open"] = True
-                        else:
-                            self.OPEN_TIME[option][name]["open"] = active["enabled"]    
+                                self.OPEN_TIME[option][name]["open"] = active["enabled"]
+            
+            # update binary actives opcode       
+            for dirr in ["binary", "turbo"]:
+                actives = binary_data[dirr]["actives"]
+                for i, details in actives.items():
+                    name_part = details["name"].split(".")[1]
+                    OP_code.ACTIVES[name_part] = int(i) 
 
     def __get_digital_open(self):
-        # for digital options
-        digital_data = self.get_digital_underlying_list_data()["underlying"]
-        for digital in digital_data:
-            name = digital["underlying"]
-            schedule = digital["schedule"]
-            self.OPEN_TIME["digital"][name]["open"] = False
-            for schedule_time in schedule:
-                start = schedule_time["open"]
-                end = schedule_time["close"]
-                if start < time.time() < end:
-                    self.OPEN_TIME["digital"][name]["open"] = True
+           # for digital options
+           digital_data = self.get_digital_underlying_list_data()["underlying"]
+           
+           for digital in digital_data:
+               name = digital["underlying"]
+               schedule = digital["schedule"]
+               self.OPEN_TIME["digital"][name]["open"] = False
+               for schedule_time in schedule:
+                   start = schedule_time["open"]
+                   end = schedule_time["close"]
+                   if start < time.time() < end:
+                       self.OPEN_TIME["digital"][name]["open"] = True
+            
+           # update digital actives opcode
+           for item in digital_data:
+               underlying_nome = item['underlying']
+               active_id_valor = item['active_id']
+               OP_code.ACTIVES[underlying_nome] = active_id_valor    
 
     def __get_other_open(self):
         # Crypto and etc pairs
@@ -330,16 +344,21 @@ class IQ_Option:
                         self.OPEN_TIME[instruments_type][name]["open"] = True
 
     def get_all_open_time(self):
-        # all pairs openned
-        self.OPEN_TIME = nested_dict(3, dict)
-        binary = threading.Thread(target=self.__get_binary_open)
-        digital = threading.Thread(target=self.__get_digital_open)
-        other = threading.Thread(target=self.__get_other_open)
-
-        binary.start(), digital.start(), other.start()
-
-        binary.join(), digital.join(), other.join()
-        return self.OPEN_TIME
+            # all pairs openned
+            self.OPEN_TIME = nested_dict(3, dict)
+            
+            binary = threading.Thread(target=self.__get_binary_open)
+            digital = threading.Thread(target=self.__get_digital_open)
+            
+            #other = threading.Thread(target=self.__get_other_open)
+    
+            binary.start(), digital.start()#, other.start()
+            binary.join(), digital.join()#, other.join()
+            
+            # ordenate updated actives opcode
+            OP_code.ACTIVES = dict(sorted(OP_code.ACTIVES.items(), key=operator.itemgetter(1)))
+            
+            return self.OPEN_TIME                       
 
     # --------for binary option detail
 
