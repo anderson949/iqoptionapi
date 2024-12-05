@@ -939,36 +939,23 @@ class IQ_Option:
                 return False, None
 
         return self.api.result, self.api.buy_multi_option[req_id]["id"]
-
+    
+    #Atualizado
     def buy(self, price, ACTIVES, ACTION, expirations):
-        self.api.buy_multi_option = {}
-        self.api.buy_successful = None
-        # req_id = "buy"
         req_id = str(randint(0, 10000))
-        try:
-            self.api.buy_multi_option[req_id]["id"] = None
-        except:
-            pass
-        self.api.buyv3(
-            float(price), OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
+        self.api.buy_multi_option.setdefault(req_id, {})
+        
         start_t = time.time()
-        id = None
-        self.api.result = None
-        while self.api.result == None or id == None:
-            try:
-                if "message" in self.api.buy_multi_option[req_id].keys():
-                    return False, self.api.buy_multi_option[req_id]["message"]
-            except:
-                pass
-            try:
-                id = self.api.buy_multi_option[req_id]["id"]
-            except:
-                pass
-            if time.time() - start_t >= 5:
-                logging.error('**warning** buy late 5 sec')
-                return False, None
-
-        return self.api.result, self.api.buy_multi_option[req_id]["id"]
+        while time.time() - start_t < 5:
+            if "message" in self.api.buy_multi_option.get(req_id, {}):
+                return False, self.api.buy_multi_option[req_id]["message"]
+    
+            id = self.api.buy_multi_option.get(req_id, {}).get("id")
+            if id is not None:
+                return self.api.result, id
+    
+        logging.error('**warning** buy late 5 sec')
+        return False, None
 
     def sell_option(self, options_ids):
         self.api.sell_option(options_ids)
@@ -1073,55 +1060,6 @@ class IQ_Option:
 
     # thank thiagottjv
     # https://github.com/Lu-Yi-Hsun/iqoptionapi/issues/65#issuecomment-513998357
-
-    def buy_digital_spot(self, active, amount, action, duration):
-        # Expiration time need to be formatted like this: YYYYMMDDHHII
-        # And need to be on GMT time
-
-        # Type - P or C
-        action = action.lower()
-        if action == 'put':
-            action = 'P'
-        elif action == 'call':
-            action = 'C'
-        else:
-            logging.error('buy_digital_spot active error')
-            return -1, None
-        # doEURUSD201907191250PT5MPSPT
-        timestamp = int(self.api.timesync.server_timestamp)
-        if duration == 1:
-            exp, _ = get_expiration_time(timestamp, duration)
-        else:
-            now_date = datetime.fromtimestamp(
-                timestamp) + timedelta(minutes=1, seconds=30)
-            while True:
-                if now_date.minute % duration == 0 and time.mktime(now_date.timetuple()) - timestamp > 30:
-                    break
-                now_date = now_date + timedelta(minutes=1)
-            exp = time.mktime(now_date.timetuple())
-
-        dateFormated = str(datetime.utcfromtimestamp(
-            exp).strftime("%Y%m%d%H%M"))
-        instrument_id = "do" + active + dateFormated + \
-                        "PT" + str(duration) + "M" + action + "SPT"
-        # self.api.digital_option_placed_id = None
-
-        request_id = self.api.place_digital_option(instrument_id, amount)
-
-        while self.api.digital_option_placed_id.get(request_id) == None:
-            pass
-        digital_order_id = self.api.digital_option_placed_id.get(request_id)
-        if isinstance(digital_order_id, int):
-            return True, digital_order_id
-        else:
-            return False, digital_order_id
-
-        # while self.api.digital_option_placed_id == None:
-        #     pass
-        # if isinstance(self.api.digital_option_placed_id, int):
-        #     return True, self.api.digital_option_placed_id
-        # else:
-        #     return False, self.api.digital_option_placed_id
 
     def get_digital_spot_profit_after_sale(self, position_id):
         def get_instrument_id_to_bid(data, instrument_id):
@@ -1606,9 +1544,10 @@ class IQ_Option:
     def logout(self):
         self.api.logout()
 
+    # Atualizado
     def buy_digital_spot_v2(self, active, amount, action, duration):
         action = action.lower()
-
+    
         if action == 'put':
             action = 'P'
         elif action == 'call':
@@ -1616,36 +1555,36 @@ class IQ_Option:
         else:
             logging.error('buy_digital_spot_v2 active error')
             return -1, None
-
+    
         timestamp = int(self.api.timesync.server_timestamp)
-
+    
         if duration == 1:
             exp, _ = get_expiration_time(timestamp, duration)
         else:
-            now_date = datetime.fromtimestamp(
-                timestamp) + timedelta(minutes=1, seconds=30)
-
-            while True:
-                if now_date.minute % duration == 0 and time.mktime(now_date.timetuple()) - timestamp > 30:
-                    break
-                now_date = now_date + timedelta(minutes=1)
-
-            exp = time.mktime(now_date.timetuple())
-
-        date_formated = str(datetime.utcfromtimestamp(exp).strftime("%Y%m%d%H%M"))
+            now_date = datetime.fromtimestamp(timestamp) + timedelta(minutes=1, seconds=30)
+            minutes_to_wait = duration - now_date.minute % duration
+            seconds_to_wait = 60 - now_date.second
+    
+            if minutes_to_wait == duration and seconds_to_wait < 30:
+                minutes_to_wait = 0  # Wait for the next full minute
+            elif seconds_to_wait >= 30:
+                minutes_to_wait += 1
+    
+            exp_time = now_date + timedelta(minutes=minutes_to_wait, seconds=seconds_to_wait)
+            exp = time.mktime(exp_time.timetuple())
+    
+        date_formatted = datetime.utcfromtimestamp(exp).strftime("%Y%m%d%H%M")
         active_id = str(OP_code.ACTIVES[active])
-        instrument_id = "do" + active_id + "A" + \
-            date_formated[:8] + "D" + date_formated[8:] + \
-            "00T" + str(duration) + "M" + action + "SPT"
+        instrument_id = f"do{active_id}A{date_formatted[:8]}D{date_formatted[8:]}00T{duration}M{action}SPT"
+    
         logger = logging.getLogger(__name__)
         logger.info(instrument_id)
+    
         request_id = self.api.place_digital_option_v2(instrument_id, active_id, amount)
-
+        
         while self.api.digital_option_placed_id.get(request_id) is None:
             pass
-
+    
         digital_order_id = self.api.digital_option_placed_id.get(request_id)
-        if isinstance(digital_order_id, int):
-            return True, digital_order_id
-        else:
-            return False, digital_order_id
+        
+        return (True, digital_order_id) if isinstance(digital_order_id, int) else (False, digital_order_id)
