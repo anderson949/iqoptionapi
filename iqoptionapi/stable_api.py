@@ -14,8 +14,6 @@ from iqoptionapi.expiration import get_expiration_time, get_remaning_time
 from iqoptionapi.version_control import api_version
 from datetime import datetime, timedelta
 from random import randint
-from concurrent.futures import ThreadPoolExecutor
-import asyncio
 
 
 def nested_dict(n, type):
@@ -285,72 +283,36 @@ class IQ_Option:
 
     # ------- chek if binary/digit/cfd/stock... if open or not
 
-    '''def __get_binary_open(self):
-            # for turbo and binary pairs
-            binary_data = self.get_all_init_v2()
-            binary_list = ["binary", "turbo"]
-            if binary_data:
-                for option in binary_list:
-                    if option in binary_data:
-                        for actives_id in binary_data[option]["actives"]:
-                            active = binary_data[option]["actives"][actives_id]
-                            name = str(active["name"]).split(".")[1]
-                            if active["enabled"] == True:
-                                if active["is_suspended"] == True:
-                                    self.OPEN_TIME[option][name]["open"] = False
-                                else:
-                                    self.OPEN_TIME[option][name]["open"] = True
-                            else:
-                                self.OPEN_TIME[option][name]["open"] = active["enabled"]
-            
-            # update binary actives opcode       
-            for dirr in ["binary", "turbo"]:
-                actives = binary_data[dirr]["actives"]
-                for i, details in actives.items():
-                    name_part = details["name"].split(".")[1]
-                    OP_code.ACTIVES[name_part] = int(i)'''
-                        
     def __get_binary_open(self):
+        # for turbo and binary pairs
         binary_data = self.get_all_init_v2()
         binary_list = ["binary", "turbo"]
-        
         if binary_data:
             for option in binary_list:
-                if option in binary_data and "actives" in binary_data[option]:
-                    actives = binary_data[option]["actives"]
-                    for actives_id, active in actives.items():
+                if option in binary_data:
+                    for actives_id in binary_data[option]["actives"]:
+                        active = binary_data[option]["actives"][actives_id]
                         name = str(active["name"]).split(".")[1]
-                        if active["enabled"]:
-                            if active["is_suspended"]:
+                        if active["enabled"] == True:
+                            if active["is_suspended"] == True:
                                 self.OPEN_TIME[option][name]["open"] = False
                             else:
                                 self.OPEN_TIME[option][name]["open"] = True
                         else:
-                            self.OPEN_TIME[option][name]["open"] = active["enabled"]
-            
-            for dirr in ["binary", "turbo"]:
-                actives = binary_data[dirr]["actives"]
-                for i, details in actives.items():
-                    name_part = details["name"].split(".")[1]
-                    OP_code.ACTIVES[name_part] = int(i)                    
-                    
-    #Atualizado
+                            self.OPEN_TIME[option][name]["open"] = active["enabled"]    
+
     def __get_digital_open(self):
+        # for digital options
         digital_data = self.get_digital_underlying_list_data()["underlying"]
-        current_time = time.time()
-        
         for digital in digital_data:
             name = digital["underlying"]
             schedule = digital["schedule"]
-            
-            is_open = any(schedule_time["open"] < current_time < schedule_time["close"] for schedule_time in schedule)
-            self.OPEN_TIME["digital"][name]["open"] = is_open
-        
-        # Atualize digital actives opcode diretamente no loop anterior
-        for item in digital_data:
-            underlying_nome = item['underlying']
-            active_id_valor = item['active_id']
-            OP_code.ACTIVES[underlying_nome] = active_id_valor
+            self.OPEN_TIME["digital"][name]["open"] = False
+            for schedule_time in schedule:
+                start = schedule_time["open"]
+                end = schedule_time["close"]
+                if start < time.time() < end:
+                    self.OPEN_TIME["digital"][name]["open"] = True
 
     def __get_other_open(self):
         # Crypto and etc pairs
@@ -367,24 +329,17 @@ class IQ_Option:
                     if start < time.time() < end:
                         self.OPEN_TIME[instruments_type][name]["open"] = True
 
-def get_all_open_time(self):
-    # all pairs openned
-    self.OPEN_TIME = nested_dict(3, dict)
-    
-    with ThreadPoolExecutor() as executor:
-        future_binary = executor.submit(self.__get_binary_open)
-        future_digital = executor.submit(self.__get_digital_open)
-        #future_other = executor.submit(self.__get_other_open)
-        
-    # Obter os resultados:
-    result_binary = future_binary.result()
-    result_digital = future_digital.result()
-    #result_other = future_other.result()
-    
-    # ordenar os ativos ativos atualizados por opcode
-    OP_code.ACTIVES = dict(sorted(OP_code.ACTIVES.items(), key=operator.itemgetter(1)))
-    
-    return self.OPEN_TIME
+    def get_all_open_time(self):
+        # all pairs openned
+        self.OPEN_TIME = nested_dict(3, dict)
+        binary = threading.Thread(target=self.__get_binary_open)
+        digital = threading.Thread(target=self.__get_digital_open)
+        other = threading.Thread(target=self.__get_other_open)
+
+        binary.start(), digital.start(), other.start()
+
+        binary.join(), digital.join(), other.join()
+        return self.OPEN_TIME
 
     # --------for binary option detail
 
@@ -401,27 +356,48 @@ def get_all_open_time(self):
             name = name[name.index(".") + 1:len(name)]
             detail[name]["binary"] = init_info["result"]["binary"]["actives"][actives]
         return detail
-    
-    # Atualizado
+
     def get_all_profit(self):
         all_profit = nested_dict(2, dict)
         init_info = self.get_all_init()
-        
-        for key, value in init_info["result"].items():
-            for actives in value["actives"]:
-                name = actives["name"][actives["name"].index(".")+1:]
-                profit = (100.0 - actives["option"]["profit"]["commission"]) / 100.0
-                if key == "turbo":
-                    all_profit[name]["turbo"] = profit
-                elif key == "binary":
-                    all_profit[name]["binary"] = profit
-        
+        for actives in init_info["result"]["turbo"]["actives"]:
+            name = init_info["result"]["turbo"]["actives"][actives]["name"]
+            name = name[name.index(".") + 1:len(name)]
+            all_profit[name]["turbo"] = (
+                100.0 -
+                init_info["result"]["turbo"]["actives"][actives]["option"]["profit"][
+                    "commission"]) / 100.0
+
+        for actives in init_info["result"]["binary"]["actives"]:
+            name = init_info["result"]["binary"]["actives"][actives]["name"]
+            name = name[name.index(".") + 1:len(name)]
+            all_profit[name]["binary"] = (
+                100.0 -
+                init_info["result"]["binary"]["actives"][actives]["option"]["profit"][
+                    "commission"]) / 100.0
         return all_profit
+
+    # ----------------------------------------
+
+    # ______________________________________self.api.getprofile() https________________________________
 
     def get_profile_ansyc(self):
         while self.api.profile.msg == None:
             pass
         return self.api.profile.msg
+
+    """def get_profile(self):
+        while True:
+            try:
+
+                respon = self.api.getprofile().json()
+                time.sleep(self.suspend)
+
+                if respon["isSuccessful"] == True:
+                    return respon
+            except:
+                logging.error('**error** get_profile try reconnect')
+                self.connect()"""
 
     def get_currency(self):
         balances_raw = self.get_balances()
@@ -431,6 +407,19 @@ def get_all_open_time(self):
 
     def get_balance_id(self):
         return global_value.balance_id
+
+    """ def get_balance(self):
+        self.api.profile.balance = None
+        while True:
+            try:
+                respon = self.get_profile()
+                self.api.profile.balance = respon["result"]["balance"]
+                break
+            except:
+                logging.error('**error** get_balance()')
+
+            time.sleep(self.suspend)
+        return self.api.profile.balance"""
 
     def get_balance(self):
 
@@ -515,30 +504,28 @@ def get_all_open_time(self):
         else:
             logging.error("ERROR doesn't have this mode")
             exit(1)
-    
-    #Atualizado
-    def get_candles(self, asset, interval, count, endtime):
-        if asset not in OP_code.ACTIVES:
-            print('Asset {} not found in constants'.format(asset))
-            return None
-    
+
+    # ________________________________________________________________________
+    # _______________________        CANDLE      _____________________________
+    # ________________________self.api.getcandles() wss________________________
+
+    def get_candles(self, ACTIVES, interval, count, endtime):
         self.api.candles.candles_data = None
-    
         while True:
             try:
-                self.api.getcandles(OP_code.ACTIVES[asset], interval, count, endtime)
-                while self.check_connect and self.api.candles.candles_data is None:
-                    continue
-    
-                if self.api.candles.candles_data is not None:
+                if ACTIVES not in OP_code.ACTIVES:
+                    print('Asset {} not found on consts'.format(ACTIVES))
                     break
-            except ConnectionError as e:
-                logging.error('Failed to connect to the API: {}'.format(str(e)))
+                self.api.getcandles(
+                    OP_code.ACTIVES[ACTIVES], interval, count, endtime)
+                while self.check_connect and self.api.candles.candles_data == None:
+                    pass
+                if self.api.candles.candles_data != None:
+                    break
+            except:
+                logging.error('**error** get_candles need reconnect')
                 self.connect()
-            except Exception as e:
-                logging.error('An error occurred while fetching candles: {}'.format(str(e)))
-                break
-    
+
         return self.api.candles.candles_data
 
     #######################################################
@@ -737,19 +724,74 @@ def get_all_open_time(self):
         # return highter %
         return self.api.traders_mood
 
-    # Atualizado
+##############################################################################################
+
+    # -----------------technical_indicators----------------------
+
+    def get_technical_indicators(self, ACTIVES):
+        request_id = self.api.get_Technical_indicators(
+            OP_code.ACTIVES[ACTIVES])
+        while self.api.technical_indicators.get(request_id) == None:
+            pass
+        return self.api.technical_indicators[request_id]
+
+##############################################################################################
+
+
+##############################################################################################
+
+    def check_binary_order(self, order_id):
+        while order_id not in self.api.order_binary:
+            pass
+        your_order = self.api.order_binary[order_id]
+        del self.api.order_binary[order_id]
+        return your_order
+
+    def check_win(self, id_number):
+        # 'win':win money 'equal':no win no loose   'loose':loose money
+        while True:
+            try:
+                listinfodata_dict = self.api.listinfodata.get(id_number)
+                if listinfodata_dict["game_state"] == 1:
+                    break
+            except:
+                pass
+        self.api.listinfodata.delete(id_number)
+        return listinfodata_dict["win"]
+
+    def check_win_v2(self, id_number, polling_time):
+        while True:
+            check, data = self.get_betinfo(id_number)
+            win = data["result"]["data"][str(id_number)]["win"]
+            if check and win != "":
+                try:
+
+                    return data["result"]["data"][str(id_number)]["profit"] - data["result"]["data"][str(id_number)][
+                        "deposit"]
+                except:
+                    pass
+            time.sleep(polling_time)
+
+        # Function by kkagill ( https://github.com/Lu-Yi-Hsun/iqoptionapi/issues/196 | https://github.com/kkagill )
+        # Function only work with Options!
+
     def check_win_v4(self, id_number):
-        x = None
-        while x is None:
-            x = self.api.socket_option_closed.get(id_number)
-    
-        win_status = x['msg']['win']
-        if win_status == 'equal':
-            return win_status, 0
-        elif win_status == 'loose':
-            return win_status, float(x['msg']['sum']) * -1
-        else:
-            return win_status, float(x['msg']['win_amount']) - float(x['msg']['sum'])
+        while True:
+            try:
+                if self.api.socket_option_closed[id_number] != None:
+                    break
+            except:
+                pass
+        x = self.api.socket_option_closed[id_number]
+        return x['msg']['win'], (0 if x['msg']['win'] == 'equal' else float(x['msg']['sum']) * -1 if x['msg']['win'] == 'loose' else float(x['msg']['win_amount']) - float(x['msg']['sum']))
+
+    def check_win_v3(self, id_number):
+        while True:
+            result = self.get_optioninfo_v2(10)
+            if result['msg']['closed_options'][0]['id'][0] == id_number and result['msg']['closed_options'][0]['id'][0] != None:
+                return result['msg']['closed_options'][0]['win'], (result['msg']['closed_options'][0]['win_amount'] - result['msg']['closed_options'][0]['amount'] if result['msg']['closed_options'][0]['win'] != 'equal' else 0)
+                break
+            time.sleep(1)
 
     # -------------------get infomation only for binary option------------------------
 
@@ -824,48 +866,68 @@ def get_all_open_time(self):
                 return remaning[1]
         logging.error('get_remaning(self,duration) ERROR duration')
         return "ERROR duration"
-        
+
     def buy_by_raw_expirations(self, price, active, direction, option, expired):
-        req_id = "buyraw"
+
         self.api.buy_multi_option = {}
         self.api.buy_successful = None
-        self.api.buy_multi_option[req_id] = {"id": None}
-    
-        async def buy_and_wait():
-            self.api.buyv3_by_raw_expired(
-                price, OP_code.ACTIVES[active], direction, option, expired, request_id=req_id)
-            start_t = time.time()
-            while True:
-                if self.api.result is not None and self.api.buy_multi_option[req_id]["id"] is not None:
-                    return self.api.result, self.api.buy_multi_option[req_id]["id"]
-    
-                if time.time() - start_t >= 5:
-                    logging.error('**warning** buy late 5 sec')
-                    return False, None
-    
-                await asyncio.sleep(0.1)  # Espera 0.1 segundos antes de verificar novamente
-    
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result, buy_id = loop.run_until_complete(buy_and_wait())
-        return result, buy_id
-    
-    #Atualizado
-    def buy(self, price, ACTIVES, ACTION, expirations):
-        req_id = str(randint(0, 10000))
-        self.api.buy_multi_option.setdefault(req_id, {})
-        
+        req_id = "buyraw"
+        try:
+            self.api.buy_multi_option[req_id]["id"] = None
+        except:
+            pass
+        self.api.buyv3_by_raw_expired(
+            price, OP_code.ACTIVES[active], direction, option, expired, request_id=req_id)
         start_t = time.time()
-        while time.time() - start_t < 5:
-            if "message" in self.api.buy_multi_option.get(req_id, {}):
-                return False, self.api.buy_multi_option[req_id]["message"]
-    
-            id = self.api.buy_multi_option.get(req_id, {}).get("id")
-            if id is not None:
-                return self.api.result, id
-    
-        logging.error('**warning** buy late 5 sec')
-        return False, None
+        id = None
+        self.api.result = None
+        while self.api.result == None or id == None:
+            try:
+                if "message" in self.api.buy_multi_option[req_id].keys():
+                    logging.error(
+                        '**warning** buy' + str(self.api.buy_multi_option[req_id]["message"]))
+                    return False, self.api.buy_multi_option[req_id]["message"]
+            except:
+                pass
+            try:
+                id = self.api.buy_multi_option[req_id]["id"]
+            except:
+                pass
+            if time.time() - start_t >= 5:
+                logging.error('**warning** buy late 5 sec')
+                return False, None
+
+        return self.api.result, self.api.buy_multi_option[req_id]["id"]
+
+    def buy(self, price, ACTIVES, ACTION, expirations):
+        self.api.buy_multi_option = {}
+        self.api.buy_successful = None
+        # req_id = "buy"
+        req_id = str(randint(0, 10000))
+        try:
+            self.api.buy_multi_option[req_id]["id"] = None
+        except:
+            pass
+        self.api.buyv3(
+            float(price), OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
+        start_t = time.time()
+        id = None
+        self.api.result = None
+        while self.api.result == None or id == None:
+            try:
+                if "message" in self.api.buy_multi_option[req_id].keys():
+                    return False, self.api.buy_multi_option[req_id]["message"]
+            except:
+                pass
+            try:
+                id = self.api.buy_multi_option[req_id]["id"]
+            except:
+                pass
+            if time.time() - start_t >= 5:
+                logging.error('**warning** buy late 5 sec')
+                return False, None
+
+        return self.api.result, self.api.buy_multi_option[req_id]["id"]
 
     def sell_option(self, options_ids):
         self.api.sell_option(options_ids)
@@ -882,17 +944,15 @@ def get_all_open_time(self):
         return self.api.sold_digital_options_respond
 # __________________for Digital___________________
 
-    #Atualizado
     def get_digital_underlying_list_data(self):
         self.api.underlying_list_data = None
         self.api.get_digital_underlying()
         start_t = time.time()
         while self.api.underlying_list_data == None:
-            if time.time() - start_t >= 60:
+            if time.time() - start_t >= 30:
                 logging.error(
                     '**warning** get_digital_underlying_list_data late 30 sec')
                 return None
-            time.sleep(1)    
 
         return self.api.underlying_list_data
 
@@ -972,6 +1032,55 @@ def get_all_open_time(self):
 
     # thank thiagottjv
     # https://github.com/Lu-Yi-Hsun/iqoptionapi/issues/65#issuecomment-513998357
+
+    def buy_digital_spot(self, active, amount, action, duration):
+        # Expiration time need to be formatted like this: YYYYMMDDHHII
+        # And need to be on GMT time
+
+        # Type - P or C
+        action = action.lower()
+        if action == 'put':
+            action = 'P'
+        elif action == 'call':
+            action = 'C'
+        else:
+            logging.error('buy_digital_spot active error')
+            return -1, None
+        # doEURUSD201907191250PT5MPSPT
+        timestamp = int(self.api.timesync.server_timestamp)
+        if duration == 1:
+            exp, _ = get_expiration_time(timestamp, duration)
+        else:
+            now_date = datetime.fromtimestamp(
+                timestamp) + timedelta(minutes=1, seconds=30)
+            while True:
+                if now_date.minute % duration == 0 and time.mktime(now_date.timetuple()) - timestamp > 30:
+                    break
+                now_date = now_date + timedelta(minutes=1)
+            exp = time.mktime(now_date.timetuple())
+
+        dateFormated = str(datetime.utcfromtimestamp(
+            exp).strftime("%Y%m%d%H%M"))
+        instrument_id = "do" + active + dateFormated + \
+                        "PT" + str(duration) + "M" + action + "SPT"
+        # self.api.digital_option_placed_id = None
+
+        request_id = self.api.place_digital_option(instrument_id, amount)
+
+        while self.api.digital_option_placed_id.get(request_id) == None:
+            pass
+        digital_order_id = self.api.digital_option_placed_id.get(request_id)
+        if isinstance(digital_order_id, int):
+            return True, digital_order_id
+        else:
+            return False, digital_order_id
+
+        # while self.api.digital_option_placed_id == None:
+        #     pass
+        # if isinstance(self.api.digital_option_placed_id, int):
+        #     return True, self.api.digital_option_placed_id
+        # else:
+        #     return False, self.api.digital_option_placed_id
 
     def get_digital_spot_profit_after_sale(self, position_id):
         def get_instrument_id_to_bid(data, instrument_id):
@@ -1456,10 +1565,9 @@ def get_all_open_time(self):
     def logout(self):
         self.api.logout()
 
-    # Atualizado
     def buy_digital_spot_v2(self, active, amount, action, duration):
         action = action.lower()
-    
+
         if action == 'put':
             action = 'P'
         elif action == 'call':
@@ -1467,36 +1575,36 @@ def get_all_open_time(self):
         else:
             logging.error('buy_digital_spot_v2 active error')
             return -1, None
-    
+
         timestamp = int(self.api.timesync.server_timestamp)
-    
+
         if duration == 1:
             exp, _ = get_expiration_time(timestamp, duration)
         else:
-            now_date = datetime.fromtimestamp(timestamp) + timedelta(minutes=1, seconds=30)
-            minutes_to_wait = duration - now_date.minute % duration
-            seconds_to_wait = 60 - now_date.second
-    
-            if minutes_to_wait == duration and seconds_to_wait < 30:
-                minutes_to_wait = 0  # Wait for the next full minute
-            elif seconds_to_wait >= 30:
-                minutes_to_wait += 1
-    
-            exp_time = now_date + timedelta(minutes=minutes_to_wait, seconds=seconds_to_wait)
-            exp = time.mktime(exp_time.timetuple())
-    
-        date_formatted = datetime.utcfromtimestamp(exp).strftime("%Y%m%d%H%M")
+            now_date = datetime.fromtimestamp(
+                timestamp) + timedelta(minutes=1, seconds=30)
+
+            while True:
+                if now_date.minute % duration == 0 and time.mktime(now_date.timetuple()) - timestamp > 30:
+                    break
+                now_date = now_date + timedelta(minutes=1)
+
+            exp = time.mktime(now_date.timetuple())
+
+        date_formated = str(datetime.utcfromtimestamp(exp).strftime("%Y%m%d%H%M"))
         active_id = str(OP_code.ACTIVES[active])
-        instrument_id = f"do{active_id}A{date_formatted[:8]}D{date_formatted[8:]}00T{duration}M{action}SPT"
-    
+        instrument_id = "do" + active_id + "A" + \
+            date_formated[:8] + "D" + date_formated[8:] + \
+            "00T" + str(duration) + "M" + action + "SPT"
         logger = logging.getLogger(__name__)
         logger.info(instrument_id)
-    
         request_id = self.api.place_digital_option_v2(instrument_id, active_id, amount)
-        
+
         while self.api.digital_option_placed_id.get(request_id) is None:
             pass
-    
+
         digital_order_id = self.api.digital_option_placed_id.get(request_id)
-        
-        return (True, digital_order_id) if isinstance(digital_order_id, int) else (False, digital_order_id)
+        if isinstance(digital_order_id, int):
+            return True, digital_order_id
+        else:
+            return False, digital_order_id
