@@ -14,6 +14,7 @@ from iqoptionapi.expiration import get_expiration_time, get_remaning_time
 from iqoptionapi.version_control import api_version
 from datetime import datetime, timedelta
 from random import randint
+from concurrent.futures import ThreadPoolExecutor
 
 
 def nested_dict(n, type):
@@ -365,22 +366,24 @@ class IQ_Option:
                     if start < time.time() < end:
                         self.OPEN_TIME[instruments_type][name]["open"] = True
 
-    def get_all_open_time(self):
-            # all pairs openned
-            self.OPEN_TIME = nested_dict(3, dict)
-            
-            binary = threading.Thread(target=self.__get_binary_open)
-            digital = threading.Thread(target=self.__get_digital_open)
-            
-            #other = threading.Thread(target=self.__get_other_open)
+def get_all_open_time(self):
+    # all pairs openned
+    self.OPEN_TIME = nested_dict(3, dict)
     
-            binary.start(), digital.start()#, other.start()
-            binary.join(), digital.join()#, other.join()
-            
-            # ordenate updated actives opcode
-            OP_code.ACTIVES = dict(sorted(OP_code.ACTIVES.items(), key=operator.itemgetter(1)))
-            
-            return self.OPEN_TIME                       
+    with ThreadPoolExecutor() as executor:
+        future_binary = executor.submit(self.__get_binary_open)
+        future_digital = executor.submit(self.__get_digital_open)
+        #future_other = executor.submit(self.__get_other_open)
+        
+    # Obter os resultados:
+    result_binary = future_binary.result()
+    result_digital = future_digital.result()
+    #result_other = future_other.result()
+    
+    # ordenar os ativos ativos atualizados por opcode
+    OP_code.ACTIVES = dict(sorted(OP_code.ACTIVES.items(), key=operator.itemgetter(1)))
+    
+    return self.OPEN_TIME
 
     # --------for binary option detail
 
@@ -397,48 +400,27 @@ class IQ_Option:
             name = name[name.index(".") + 1:len(name)]
             detail[name]["binary"] = init_info["result"]["binary"]["actives"][actives]
         return detail
-
+    
+    # Atualizado
     def get_all_profit(self):
         all_profit = nested_dict(2, dict)
         init_info = self.get_all_init()
-        for actives in init_info["result"]["turbo"]["actives"]:
-            name = init_info["result"]["turbo"]["actives"][actives]["name"]
-            name = name[name.index(".") + 1:len(name)]
-            all_profit[name]["turbo"] = (
-                100.0 -
-                init_info["result"]["turbo"]["actives"][actives]["option"]["profit"][
-                    "commission"]) / 100.0
-
-        for actives in init_info["result"]["binary"]["actives"]:
-            name = init_info["result"]["binary"]["actives"][actives]["name"]
-            name = name[name.index(".") + 1:len(name)]
-            all_profit[name]["binary"] = (
-                100.0 -
-                init_info["result"]["binary"]["actives"][actives]["option"]["profit"][
-                    "commission"]) / 100.0
+        
+        for key, value in init_info["result"].items():
+            for actives in value["actives"]:
+                name = actives["name"][actives["name"].index(".")+1:]
+                profit = (100.0 - actives["option"]["profit"]["commission"]) / 100.0
+                if key == "turbo":
+                    all_profit[name]["turbo"] = profit
+                elif key == "binary":
+                    all_profit[name]["binary"] = profit
+        
         return all_profit
-
-    # ----------------------------------------
-
-    # ______________________________________self.api.getprofile() https________________________________
 
     def get_profile_ansyc(self):
         while self.api.profile.msg == None:
             pass
         return self.api.profile.msg
-
-    """def get_profile(self):
-        while True:
-            try:
-
-                respon = self.api.getprofile().json()
-                time.sleep(self.suspend)
-
-                if respon["isSuccessful"] == True:
-                    return respon
-            except:
-                logging.error('**error** get_profile try reconnect')
-                self.connect()"""
 
     def get_currency(self):
         balances_raw = self.get_balances()
@@ -448,19 +430,6 @@ class IQ_Option:
 
     def get_balance_id(self):
         return global_value.balance_id
-
-    """ def get_balance(self):
-        self.api.profile.balance = None
-        while True:
-            try:
-                respon = self.get_profile()
-                self.api.profile.balance = respon["result"]["balance"]
-                break
-            except:
-                logging.error('**error** get_balance()')
-
-            time.sleep(self.suspend)
-        return self.api.profile.balance"""
 
     def get_balance(self):
 
@@ -545,28 +514,30 @@ class IQ_Option:
         else:
             logging.error("ERROR doesn't have this mode")
             exit(1)
-
-    # ________________________________________________________________________
-    # _______________________        CANDLE      _____________________________
-    # ________________________self.api.getcandles() wss________________________
-
-    def get_candles(self, ACTIVES, interval, count, endtime):
+    
+    #Atualizado
+    def get_candles(self, asset, interval, count, endtime):
+        if asset not in OP_code.ACTIVES:
+            print('Asset {} not found in constants'.format(asset))
+            return None
+    
         self.api.candles.candles_data = None
+    
         while True:
             try:
-                if ACTIVES not in OP_code.ACTIVES:
-                    print('Asset {} not found on consts'.format(ACTIVES))
+                self.api.getcandles(OP_code.ACTIVES[asset], interval, count, endtime)
+                while self.check_connect and self.api.candles.candles_data is None:
+                    continue
+    
+                if self.api.candles.candles_data is not None:
                     break
-                self.api.getcandles(
-                    OP_code.ACTIVES[ACTIVES], interval, count, endtime)
-                while self.check_connect and self.api.candles.candles_data == None:
-                    pass
-                if self.api.candles.candles_data != None:
-                    break
-            except:
-                logging.error('**error** get_candles need reconnect')
+            except ConnectionError as e:
+                logging.error('Failed to connect to the API: {}'.format(str(e)))
                 self.connect()
-
+            except Exception as e:
+                logging.error('An error occurred while fetching candles: {}'.format(str(e)))
+                break
+    
         return self.api.candles.candles_data
 
     #######################################################
@@ -765,74 +736,19 @@ class IQ_Option:
         # return highter %
         return self.api.traders_mood
 
-##############################################################################################
-
-    # -----------------technical_indicators----------------------
-
-    def get_technical_indicators(self, ACTIVES):
-        request_id = self.api.get_Technical_indicators(
-            OP_code.ACTIVES[ACTIVES])
-        while self.api.technical_indicators.get(request_id) == None:
-            pass
-        return self.api.technical_indicators[request_id]
-
-##############################################################################################
-
-
-##############################################################################################
-
-    def check_binary_order(self, order_id):
-        while order_id not in self.api.order_binary:
-            pass
-        your_order = self.api.order_binary[order_id]
-        del self.api.order_binary[order_id]
-        return your_order
-
-    def check_win(self, id_number):
-        # 'win':win money 'equal':no win no loose   'loose':loose money
-        while True:
-            try:
-                listinfodata_dict = self.api.listinfodata.get(id_number)
-                if listinfodata_dict["game_state"] == 1:
-                    break
-            except:
-                pass
-        self.api.listinfodata.delete(id_number)
-        return listinfodata_dict["win"]
-
-    def check_win_v2(self, id_number, polling_time):
-        while True:
-            check, data = self.get_betinfo(id_number)
-            win = data["result"]["data"][str(id_number)]["win"]
-            if check and win != "":
-                try:
-
-                    return data["result"]["data"][str(id_number)]["profit"] - data["result"]["data"][str(id_number)][
-                        "deposit"]
-                except:
-                    pass
-            time.sleep(polling_time)
-
-        # Function by kkagill ( https://github.com/Lu-Yi-Hsun/iqoptionapi/issues/196 | https://github.com/kkagill )
-        # Function only work with Options!
-
+    # Atualizado
     def check_win_v4(self, id_number):
-        while True:
-            try:
-                if self.api.socket_option_closed[id_number] != None:
-                    break
-            except:
-                pass
-        x = self.api.socket_option_closed[id_number]
-        return x['msg']['win'], (0 if x['msg']['win'] == 'equal' else float(x['msg']['sum']) * -1 if x['msg']['win'] == 'loose' else float(x['msg']['win_amount']) - float(x['msg']['sum']))
-
-    def check_win_v3(self, id_number):
-        while True:
-            result = self.get_optioninfo_v2(10)
-            if result['msg']['closed_options'][0]['id'][0] == id_number and result['msg']['closed_options'][0]['id'][0] != None:
-                return result['msg']['closed_options'][0]['win'], (result['msg']['closed_options'][0]['win_amount'] - result['msg']['closed_options'][0]['amount'] if result['msg']['closed_options'][0]['win'] != 'equal' else 0)
-                break
-            time.sleep(1)
+        x = None
+        while x is None:
+            x = self.api.socket_option_closed.get(id_number)
+    
+        win_status = x['msg']['win']
+        if win_status == 'equal':
+            return win_status, 0
+        elif win_status == 'loose':
+            return win_status, float(x['msg']['sum']) * -1
+        else:
+            return win_status, float(x['msg']['win_amount']) - float(x['msg']['sum'])
 
     # -------------------get infomation only for binary option------------------------
 
@@ -972,6 +888,7 @@ class IQ_Option:
         return self.api.sold_digital_options_respond
 # __________________for Digital___________________
 
+    #Atualizado
     def get_digital_underlying_list_data(self):
         self.api.underlying_list_data = None
         self.api.get_digital_underlying()
@@ -981,6 +898,7 @@ class IQ_Option:
                 logging.error(
                     '**warning** get_digital_underlying_list_data late 30 sec')
                 return None
+            time.sleep(1)    
 
         return self.api.underlying_list_data
 
