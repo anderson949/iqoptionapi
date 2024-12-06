@@ -15,6 +15,7 @@ from iqoptionapi.version_control import api_version
 from datetime import datetime, timedelta
 from random import randint
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
 
 
 def nested_dict(n, type):
@@ -823,38 +824,31 @@ def get_all_open_time(self):
                 return remaning[1]
         logging.error('get_remaning(self,duration) ERROR duration')
         return "ERROR duration"
-
+        
     def buy_by_raw_expirations(self, price, active, direction, option, expired):
-
+        req_id = "buyraw"
         self.api.buy_multi_option = {}
         self.api.buy_successful = None
-        req_id = "buyraw"
-        try:
-            self.api.buy_multi_option[req_id]["id"] = None
-        except:
-            pass
-        self.api.buyv3_by_raw_expired(
-            price, OP_code.ACTIVES[active], direction, option, expired, request_id=req_id)
-        start_t = time.time()
-        id = None
-        self.api.result = None
-        while self.api.result == None or id == None:
-            try:
-                if "message" in self.api.buy_multi_option[req_id].keys():
-                    logging.error(
-                        '**warning** buy' + str(self.api.buy_multi_option[req_id]["message"]))
-                    return False, self.api.buy_multi_option[req_id]["message"]
-            except:
-                pass
-            try:
-                id = self.api.buy_multi_option[req_id]["id"]
-            except:
-                pass
-            if time.time() - start_t >= 5:
-                logging.error('**warning** buy late 5 sec')
-                return False, None
-
-        return self.api.result, self.api.buy_multi_option[req_id]["id"]
+        self.api.buy_multi_option[req_id] = {"id": None}
+    
+        async def buy_and_wait():
+            self.api.buyv3_by_raw_expired(
+                price, OP_code.ACTIVES[active], direction, option, expired, request_id=req_id)
+            start_t = time.time()
+            while True:
+                if self.api.result is not None and self.api.buy_multi_option[req_id]["id"] is not None:
+                    return self.api.result, self.api.buy_multi_option[req_id]["id"]
+    
+                if time.time() - start_t >= 5:
+                    logging.error('**warning** buy late 5 sec')
+                    return False, None
+    
+                await asyncio.sleep(0.1)  # Espera 0.1 segundos antes de verificar novamente
+    
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result, buy_id = loop.run_until_complete(buy_and_wait())
+        return result, buy_id
     
     #Atualizado
     def buy(self, price, ACTIVES, ACTION, expirations):
