@@ -16,7 +16,6 @@ from datetime import datetime, timedelta
 from random import randint
 
 
-'''
 def nested_dict(n, type):
     if n == 1:
         return defaultdict(type)
