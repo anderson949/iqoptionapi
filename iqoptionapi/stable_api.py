@@ -78,80 +78,92 @@ class IQ_Option:
         self.SESSION_HEADER = header
         self.SESSION_COOKIE = cookie
 
-    def connect(self, sms_code=None):
-        try:
-            self.api.close()
-        except:
-            pass
-            # logging.error('**warning** self.api.close() fail')
-
-        self.api = IQOptionAPI(
-            "iqoption.com", self.email, self.password)
-        check = None
-
-        # 2FA--
-        if sms_code is not None:
-            self.api.setTokenSMS(self.resp_sms)
-            status, reason = self.api.connect2fa(sms_code)
-            if not status:
-                return status, reason
-        # 2FA--
-
-        self.api.set_session(headers=self.SESSION_HEADER,
-                             cookies=self.SESSION_COOKIE)
-
-        check, reason = self.api.connect()
-
-        if check == True:
-            # -------------reconnect subscribe_candle
-            self.re_subscribe_stream()
-
-            # ---------for async get name: "position-changed", microserviceName
-            while global_value.balance_id == None:
-                pass
-
-            self.position_change_all(
-                "subscribeMessage", global_value.balance_id)
-
-            self.order_changed_all("subscribeMessage")
-            self.api.setOptions(1, True)
-
-            """
-            self.api.subscribe_position_changed(
-                "position-changed", "multi-option", 2)
-
-            self.api.subscribe_position_changed(
-                "trading-fx-option.position-changed", "fx-option", 3)
-
-            self.api.subscribe_position_changed(
-                "position-changed", "crypto", 4)
-
-            self.api.subscribe_position_changed(
-                "position-changed", "forex", 5)
-
-            self.api.subscribe_position_changed(
-                "digital-options.position-changed", "digital-option", 6)
-
-            self.api.subscribe_position_changed(
-                "position-changed", "cfd", 7)
-            """
-
-            # self.get_balance_id()
-            return True, None
-        else:
-            if json.loads(reason)['code'] == 'verify':
-                response = self.api.send_sms_code(json.loads(reason)['token'])
-
-                if response.json()['code'] != 'success':
-                    return False, response.json()['message']
-
-                # token_sms
-                self.resp_sms = response
-                return False, "2FA"
-            return False, reason
+    def connect(self, retries=3, delay=5, sms_code=None):
+        """
+        Estabelece a conexão com o servidor da IQ Option, com suporte a reconexão
+        e autenticação 2FA (caso necessário).
+    
+        :param retries: Número de tentativas de reconexão em caso de falha.
+        :param delay: Intervalo (em segundos) entre tentativas.
+        :param sms_code: Código de autenticação 2FA, se aplicável.
+        :return: Tuple (bool, str | None) indicando sucesso e mensagem de erro (se houver).
+        """
+        for attempt in range(retries):
+            try:
+                # Fecha conexão existente, se houver
+                if hasattr(self, 'api') and self.api:
+                    try:
+                        self.api.close()
+                    except Exception as e:
+                        logging.warning(f"Falha ao fechar conexão anterior: {e}")
+    
+                # Inicializa a API com credenciais
+                self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+    
+                # Configura sessão
+                self.api.set_session(headers=self.SESSION_HEADER,
+                                     cookies=self.SESSION_COOKIE)
+    
+                # Autenticação 2FA (se necessário)
+                if sms_code is not None:
+                    self.api.setTokenSMS(self.resp_sms)
+                    status, reason = self.api.connect2fa(sms_code)
+                    if not status:
+                        return status, reason
+    
+                # Conecta ao servidor
+                check, reason = self.api.connect()
+    
+                if check:
+                    # Reconecta streams e configurações após conexão
+                    self.re_subscribe_stream()
+    
+                    # Espera até que o ID do saldo seja carregado
+                    while global_value.balance_id is None:
+                        time.sleep(0.1)
+    
+                    # Subscrição de mensagens e configurações adicionais
+                    self.position_change_all("subscribeMessage", global_value.balance_id)
+                    self.order_changed_all("subscribeMessage")
+                    self.api.setOptions(1, True)
+    
+                    logging.info("Conexão estabelecida com sucesso.")
+                    return True, None
+                else:
+                    # Verifica se o erro exige 2FA
+                    if 'code' in json.loads(reason) and json.loads(reason)['code'] == 'verify':
+                        response = self.api.send_sms_code(json.loads(reason)['token'])
+                        if response.json().get('code') != 'success':
+                            return False, response.json().get('message')
+                        self.resp_sms = response
+                        return False, "2FA necessária"
+    
+                    logging.error(f"Falha ao conectar: {reason}")
+                    return False, reason
+            except Exception as e:
+                logging.error(f"Erro durante a tentativa de conexão: {e}")
+                if attempt < retries - 1:
+                    logging.info(f"Tentativa {attempt + 1} falhou. Retentando em {delay} segundos...")
+                    time.sleep(delay)
+                else:
+                    logging.error("Todas as tentativas de conexão falharam.")
+                    return False, str(e)
 
     # self.update_ACTIVES_OPCODE()
-
+    def ensure_connection(self):
+        if not self.check_connect():
+            self.connect()
+            
+    def monitor_connection(self):
+        while True:
+            try:
+                if not self.check_connect():
+                    logging.warning("Conexão perdida. Tentando reconectar.")
+                    self.connect()
+                time.sleep(30)  # Intervalo configurável
+            except Exception as e:
+                logging.error(f"Erro no monitoramento da conexão: {e}")            
+            
     def connect_2fa(self, sms_code):
         return self.connect(sms_code=sms_code)
 
@@ -238,6 +250,7 @@ class IQ_Option:
 
     # _________________________self.api.get_api_option_init_all() wss______________________
     def get_all_init(self):
+        self.ensure_connection()     
 
         while True:
             self.api.api_option_init_all_result = None
