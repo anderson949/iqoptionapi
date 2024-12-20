@@ -251,7 +251,7 @@ class IQ_Option:
                     time.sleep(5)
             start = time.time()
             while True:
-                if time.time() - start > 120:
+                if time.time() - start > 300:
                     logging.error('**warning** get_all_init late 30 sec')
                     break
                 try:
@@ -274,7 +274,7 @@ class IQ_Option:
         self.api.get_api_option_init_all_v2()
         start_t = time.time()
         while self.api.api_option_init_all_result_v2 == None:
-            if time.time() - start_t >= 120:
+            if time.time() - start_t >= 300:
                 logging.error('**warning** get_all_init_v2 late 30 sec')
                 return None
         return self.api.api_option_init_all_result_v2
@@ -949,7 +949,7 @@ class IQ_Option:
         self.api.get_digital_underlying()
         start_t = time.time()
         while self.api.underlying_list_data == None:
-            if time.time() - start_t >= 120:
+            if time.time() - start_t >= 300:
                 logging.error(
                     '**warning** get_digital_underlying_list_data late 30 sec')
                 return None
