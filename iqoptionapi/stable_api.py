@@ -53,7 +53,7 @@ class IQ_Option:
         self.api = None
         #
         # --start
-        #self.connect()
+        self.connect()
         # this auto function delay too long
 
     # --------------------------------------------------------------------------
