@@ -167,15 +167,29 @@ class IQ_Option:
     def connect_2fa(self, sms_code):
         return self.connect(sms_code=sms_code)
 
-    def check_connect(self):
-        # True/False
-        # if not connected, sometimes it's None, sometimes its '0', so
-        # both will fall on this first case
-        if not global_value.check_websocket_if_connect:
-            return False
-        else:
+    def check_connect(self, retries=3, delay=5):
+        """
+        Verifica se a conexão WebSocket está ativa. Tenta reconectar caso esteja desconectada.
+    
+        :param retries: Número de tentativas de reconexão.
+        :param delay: Tempo em segundos entre tentativas.
+        :return: True se conectado, False caso contrário.
+        """
+        if global_value.check_websocket_if_connect:
             return True
-        # wait for timestamp getting
+    
+        logging.warning("Conexão perdida. Tentando reconectar...")
+        for attempt in range(retries):
+            try:
+                if self.connect():
+                    logging.info("Reconexão bem-sucedida.")
+                    return True
+            except Exception as e:
+                logging.error(f"Erro ao tentar reconectar: {e}")
+            time.sleep(delay)
+    
+        logging.error("Falha ao reconectar após várias tentativas.")
+        return False
 
     # _________________________UPDATE ACTIVES OPCODE_____________________
     def get_all_ACTIVES_OPCODE(self):
@@ -216,20 +230,32 @@ class IQ_Option:
             pass
         return self.api.leaderboard_deals_client
 
-    def get_instruments(self, type):
-        # type="crypto"/"forex"/"cfd"
-        time.sleep(self.suspend)
-        self.api.instruments = None
-        while self.api.instruments == None:
+    def get_instruments(self, type, retries=3):
+        """
+        Busca instrumentos financeiros com suporte a reconexão.
+    
+        :param type: Tipo de instrumento ("crypto", "forex", "cfd").
+        :param retries: Número de tentativas em caso de falha.
+        :return: Lista de instrumentos ou None em caso de falha.
+        """
+        for attempt in range(retries):
             try:
+                self.ensure_connection()
+                self.api.instruments = None
                 self.api.get_instruments(type)
+    
                 start = time.time()
-                while self.api.instruments == None and time.time() - start < 10:
-                    pass
-            except:
-                logging.error('**error** api.get_instruments need reconnect')
+                while self.api.instruments is None:
+                    if time.time() - start > 10:  # Timeout de 10 segundos
+                        raise TimeoutError("Tempo limite excedido para get_instruments")
+    
+                return self.api.instruments
+            except Exception as e:
+                logging.error(f"Tentativa {attempt + 1} falhou: {e}")
                 self.connect()
-        return self.api.instruments
+    
+        logging.error(f"Falha ao obter instrumentos do tipo {type} após várias tentativas.")
+        return None
 
     def instruments_input_to_ACTIVES(self, type):
         instruments = self.get_instruments(type)
@@ -395,23 +421,23 @@ class IQ_Option:
     # ______________________________________self.api.getprofile() https________________________________
 
     def get_profile_ansyc(self):
-        while self.api.profile.msg == None:
-            pass
+        while self.api.profile.msg is None:
+            time.sleep(0.1)
         return self.api.profile.msg
 
-    """def get_profile(self):
+    def get_profile(self):
         while True:
             try:
-
-                respon = self.api.getprofile().json()
+                response = self.api.getprofile().json()
                 time.sleep(self.suspend)
-
-                if respon["isSuccessful"] == True:
-                    return respon
-            except:
-                logging.error('**error** get_profile try reconnect')
-                self.connect()"""
-
+                if response["isSuccessful"]:
+                    self.api.profile.msg = response
+                    return response
+            except Exception as e:
+                logging.error(f'Erro ao obter perfil: {e}')
+                self.connect()
+            time.sleep(self.suspend)
+        
     def get_currency(self):
         balances_raw = self.get_balances()
         for balance in balances_raw["msg"]:
@@ -522,24 +548,39 @@ class IQ_Option:
     # _______________________        CANDLE      _____________________________
     # ________________________self.api.getcandles() wss________________________
 
-    def get_candles(self, ACTIVES, interval, count, endtime):
-        self.api.candles.candles_data = None
-        while True:
+    def get_candles(self, ACTIVES, interval, count, endtime, retries=3):
+        """
+        Busca os dados de candles com suporte a reconexão.
+    
+        :param ACTIVES: Ativo financeiro.
+        :param interval: Intervalo de tempo do candle.
+        :param count: Número de candles.
+        :param endtime: Timestamp de término.
+        :param retries: Número de tentativas em caso de falha.
+        :return: Dados dos candles ou None em caso de falha.
+        """
+        for attempt in range(retries):
             try:
+                self.ensure_connection()
+    
                 if ACTIVES not in OP_code.ACTIVES:
-                    print('Asset {} not found on consts'.format(ACTIVES))
-                    break
-                self.api.getcandles(
-                    OP_code.ACTIVES[ACTIVES], interval, count, endtime)
-                while self.check_connect and self.api.candles.candles_data == None:
-                    pass
-                if self.api.candles.candles_data != None:
-                    break
-            except:
-                logging.error('**error** get_candles need reconnect')
+                    raise ValueError(f"Ativo {ACTIVES} não encontrado.")
+    
+                self.api.candles.candles_data = None
+                self.api.getcandles(OP_code.ACTIVES[ACTIVES], interval, count, endtime)
+    
+                start = time.time()
+                while self.api.candles.candles_data is None:
+                    if time.time() - start > 30:  # Timeout de 30 segundos
+                        raise TimeoutError("Tempo limite excedido para get_candles")
+    
+                return self.api.candles.candles_data
+            except Exception as e:
+                logging.error(f"Tentativa {attempt + 1} falhou: {e}")
                 self.connect()
-
-        return self.api.candles.candles_data
+    
+        logging.error("Falha ao obter candles após várias tentativas.")
+        return None
 
     #######################################################
     # ______________________________________________________
@@ -912,35 +953,43 @@ class IQ_Option:
 
         return self.api.result, self.api.buy_multi_option[req_id]["id"]
 
-    def buy(self, price, ACTIVES, ACTION, expirations):
-        self.api.buy_multi_option = {}
-        self.api.buy_successful = None
-        # req_id = "buy"
-        req_id = str(randint(0, 10000))
-        try:
-            self.api.buy_multi_option[req_id]["id"] = None
-        except:
-            pass
-        self.api.buyv3(
-            float(price), OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
-        start_t = time.time()
-        id = None
-        self.api.result = None
-        while self.api.result == None or id == None:
+    def buy(self, price, ACTIVES, ACTION, expirations, retries=3):
+        """
+        Realiza uma compra com suporte a reconexão.
+    
+        :param price: Valor de compra.
+        :param ACTIVES: Ativo financeiro.
+        :param ACTION: Ação ("call" ou "put").
+        :param expirations: Tempo de expiração.
+        :param retries: Número de tentativas em caso de falha.
+        :return: Tuple (bool, id | mensagem de erro).
+        """
+        for attempt in range(retries):
             try:
-                if "message" in self.api.buy_multi_option[req_id].keys():
-                    return False, self.api.buy_multi_option[req_id]["message"]
-            except:
-                pass
-            try:
-                id = self.api.buy_multi_option[req_id]["id"]
-            except:
-                pass
-            if time.time() - start_t >= 60:
-                logging.error('**warning** buy late 5 sec')
-                return False, None
-
-        return self.api.result, self.api.buy_multi_option[req_id]["id"]
+                self.ensure_connection()
+                self.api.buy_multi_option = {}
+                req_id = str(randint(0, 10000))
+    
+                self.api.buyv3(
+                    float(price),
+                    OP_code.ACTIVES[ACTIVES],
+                    str(ACTION),
+                    int(expirations),
+                    req_id
+                )
+    
+                start_t = time.time()
+                while self.api.result is None or req_id not in self.api.buy_multi_option:
+                    if time.time() - start_t > 60:  # Timeout de 60 segundos
+                        raise TimeoutError("Tempo limite excedido para buy")
+    
+                return True, self.api.buy_multi_option[req_id].get("id")
+            except Exception as e:
+                logging.error(f"Tentativa {attempt + 1} falhou: {e}")
+                self.connect()
+    
+        logging.error("Falha ao realizar a compra após várias tentativas.")
+        return False, "Erro ao comprar"
 
     def sell_option(self, options_ids):
         self.api.sell_option(options_ids)
@@ -1325,15 +1374,14 @@ class IQ_Option:
         return self.api.order_async[buy_order_id]
 
     def get_order(self, buy_order_id):
-        # self.api.order_data["status"]
-        # reject:you can not get this order
-        # pending_new:this order is working now
-        # filled:this order is ok now
-        # new
         self.api.order_data = None
         self.api.get_order(buy_order_id)
-        while self.api.order_data == None:
-            pass
+        start_time = time.time()
+        while self.api.order_data is None:
+            if time.time() - start_time > 10:
+                logging.error('Tempo limite excedido ao obter ordem')
+                return False, None
+            time.sleep(0.1)
         if self.api.order_data["status"] == 2000:
             return True, self.api.order_data["msg"]
         else:
