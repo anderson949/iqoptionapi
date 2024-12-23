@@ -85,38 +85,47 @@ class IQ_Option:
         self.SESSION_COOKIE = cookie
                 
     def connect(self, retries=5, delay=5, sms_code=None):
+        """
+        Estabelece a conexão com a API da IQ Option.
+        
+        :param retries: Número máximo de tentativas de reconexão.
+        :param delay: Intervalo inicial entre tentativas (em segundos).
+        :param sms_code: Código 2FA, se necessário.
+        :return: True se conectado com sucesso, False caso contrário.
+        """
         for attempt in range(retries):
             try:
                 self.api = IQOptionAPI("iqoption.com", self.email, self.password)
                 self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
+                
                 if sms_code:
                     self.api.connect2fa(sms_code)
+                
                 check, reason = self.api.connect()
                 if check:
-                    self.re_subscribe_stream()
-                    while global_value.balance_id is None:
-                        time.sleep(0.1)
-                    self.position_change_all("subscribeMessage", global_value.balance_id)
-                    self.order_changed_all("subscribeMessage")
-                    self.api.setOptions(1, True)
-                    logging.info("Conexão estabelecida com sucesso.")
-                    return True, None
+                    logging.info("Conectado com sucesso.")
+                    return True
                 else:
                     logging.error(f"Falha ao conectar: {reason}")
-                    return False, reason
             except Exception as e:
                 logging.error(f"Erro durante a tentativa de conexão: {e}")
-                if attempt < retries - 1:
-                    delay = delay * (1.5 ** attempt)  # Exponential backoff
-                    logging.info(f"Tentativa {attempt + 1} falhou. Retentando em {delay:.2f} segundos...")
-                    time.sleep(delay)
-                else:
-                    logging.error("Todas as tentativas de conexão falharam.")
-                    return False, str(e)
+            
+            # Exponential backoff
+            delay *= 2 ** attempt
+            logging.warning(f"Tentativa {attempt + 1} falhou. Retentando em {delay} segundos...")
+            time.sleep(delay)
+        
+        logging.error("Todas as tentativas de conexão falharam.")
+        return False
 
     # self.update_ACTIVES_OPCODE()
     def ensure_connection(self):
+        """
+        Garante que a conexão com a API da IQ Option está ativa.
+        Se não estiver, tenta reconectar.
+        """
         if not self.check_connect():
+            logging.warning("Conexão perdida. Tentando reconectar...")
             self.connect()
             
     def monitor_connection(self):
@@ -413,6 +422,12 @@ class IQ_Option:
     # ______________________________________self.api.getprofile() https________________________________
 
     def get_profile_async(self, timeout=30):
+        """
+        Obtém o perfil do usuário de forma assíncrona com um tempo limite.
+        
+        :param timeout: Tempo máximo de espera em segundos.
+        :return: Dados do perfil ou None em caso de erro.
+        """
         start_time = time.time()
         while self.api.profile.msg is None:
             if time.time() - start_time > timeout:
