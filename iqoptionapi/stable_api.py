@@ -14,7 +14,7 @@ from iqoptionapi.expiration import get_expiration_time, get_remaning_time
 from iqoptionapi.version_control import api_version
 from datetime import datetime, timedelta
 from random import randint
-from circuitbreaker import circuit
+
 
 def nested_dict(n, type):
     if n == 1:
@@ -41,19 +41,12 @@ class IQ_Option:
         self.get_digital_spot_profit_after_sale_data = nested_dict(2, int)
         self.get_realtime_strike_list_temp_data = {}
         self.get_realtime_strike_list_temp_expiration = 0
-       
-        # In __init__ method
-        self.monitor_thread = threading.Thread(target=self.monitor_connection)
-        self.monitor_thread.daemon = True
-        self.monitor_thread.start()
-                
         self.SESSION_HEADER = {
             "User-Agent": r"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.139 Safari/537.36"}
         self.SESSION_COOKIE = {}
-        self.api = None
         #
         # --start
-        #self.connect()
+        # self.connect()
         # this auto function delay too long
 
     # --------------------------------------------------------------------------
@@ -84,143 +77,93 @@ class IQ_Option:
     def set_session(self, header, cookie):
         self.SESSION_HEADER = header
         self.SESSION_COOKIE = cookie
-                
-    def connect(self, retries=3, delay=5, sms_code=None):
-        """
-        Estabelece a conexão com o servidor da IQ Option, com suporte a reconexão
-        e autenticação 2FA (caso necessário).
-        
-        :param retries: Número de tentativas de reconexão em caso de falha.
-        :param delay: Intervalo (em segundos) entre tentativas.
-        :param sms_code: Código de autenticação 2FA, se aplicável.
-        :return: Tuple (bool, str | None) indicando sucesso e mensagem de erro (se houver).
-        """
-        for attempt in range(retries):
-            try:
-                # Fecha conexão existente, se houver
-                if hasattr(self, 'api') and self.api:
-                    try:
-                        self.api.close()
-                    except Exception as e:
-                        logging.warning(f"Falha ao fechar conexão anterior: {e}")
-    
-                # Inicializa a API com credenciais
-                self.api = IQOptionAPI("iqoption.com", self.email, self.password)
-    
-                # Configura sessão
-                self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
-    
-                # Autenticação 2FA (se necessário)
-                if sms_code is not None:
-                    self.api.setTokenSMS(self.resp_sms)
-                    status, reason = self.api.connect2fa(sms_code)
-                    if not status:
-                        return status, reason
-    
-                # Conecta ao servidor
-                check, reason = self.api.connect()
-    
-                if check:
-                    # Reconecta streams e configurações após conexão
-                    self.re_subscribe_stream()
-    
-                    # Espera até que o ID do saldo seja carregado
-                    while global_value.balance_id is None:
-                        time.sleep(0.1)
-    
-                    # Subscrição de mensagens e configurações adicionais
-                    self.position_change_all("subscribeMessage", global_value.balance_id)
-                    self.order_changed_all("subscribeMessage")
-                    self.api.setOptions(1, True)
-    
-                    logging.info("Conexão estabelecida com sucesso.")
-                    return True, None  # Retorna True e None para indicar sucesso
-                else:
-                    # Verifica se o erro exige 2FA
-                    if 'code' in json.loads(reason) and json.loads(reason)['code'] == 'verify':
-                        response = self.api.send_sms_code(json.loads(reason)['token'])
-                        if response.json().get('code') != 'success':
-                            return False, response.json().get('message')
-                        self.resp_sms = response
-                        return False, "2FA necessária"
-    
-                    logging.error(f"Falha ao conectar: {reason}")
-                    return False, reason  # Retorna False e a mensagem de erro
-            except Exception as e:
-                logging.error(f"Erro durante a tentativa de conexão: {e}")
-                if attempt < retries - 1:
-                    logging.info(f"Tentativa {attempt + 1} falhou. Retentando em {delay} segundos...")
-                    time.sleep(delay)
-                else:
-                    logging.error("Todas as tentativas de conexão falharam.")
-                    return False, str(e)  # Retorna False e a mensagem de erro
 
-    def ensure_connection(self):
-        if not hasattr(self, 'api') or self.api is None:
-            logging.error("API não foi inicializada. Tentando conectar...")
-            self.connect()
-        elif not self.check_connect():
-            logging.warning("Conexão perdida. Tentando reconectar...")
-            self.connect()
-            
-    def monitor_connection(self):
-        while True:
-            try:
-                if not self.check_connect():
-                    logging.warning("Conexão perdida. Tentando reconectar.")
-                    self.connect()
-                time.sleep(30)  # Intervalo configurável
-            except Exception as e:
-                logging.error(f"Erro no monitoramento da conexão: {e}")            
-            
+    def connect(self, sms_code=None):
+        try:
+            self.api.close()
+        except:
+            pass
+            # logging.error('**warning** self.api.close() fail')
+
+        self.api = IQOptionAPI(
+            "iqoption.com", self.email, self.password)
+        check = None
+
+        # 2FA--
+        if sms_code is not None:
+            self.api.setTokenSMS(self.resp_sms)
+            status, reason = self.api.connect2fa(sms_code)
+            if not status:
+                return status, reason
+        # 2FA--
+
+        self.api.set_session(headers=self.SESSION_HEADER,
+                             cookies=self.SESSION_COOKIE)
+
+        check, reason = self.api.connect()
+
+        if check == True:
+            # -------------reconnect subscribe_candle
+            self.re_subscribe_stream()
+
+            # ---------for async get name: "position-changed", microserviceName
+            while global_value.balance_id == None:
+                pass
+
+            self.position_change_all(
+                "subscribeMessage", global_value.balance_id)
+
+            self.order_changed_all("subscribeMessage")
+            self.api.setOptions(1, True)
+
+            """
+            self.api.subscribe_position_changed(
+                "position-changed", "multi-option", 2)
+
+            self.api.subscribe_position_changed(
+                "trading-fx-option.position-changed", "fx-option", 3)
+
+            self.api.subscribe_position_changed(
+                "position-changed", "crypto", 4)
+
+            self.api.subscribe_position_changed(
+                "position-changed", "forex", 5)
+
+            self.api.subscribe_position_changed(
+                "digital-options.position-changed", "digital-option", 6)
+
+            self.api.subscribe_position_changed(
+                "position-changed", "cfd", 7)
+            """
+
+            # self.get_balance_id()
+            return True, None
+        else:
+            if json.loads(reason)['code'] == 'verify':
+                response = self.api.send_sms_code(json.loads(reason)['token'])
+
+                if response.json()['code'] != 'success':
+                    return False, response.json()['message']
+
+                # token_sms
+                self.resp_sms = response
+                return False, "2FA"
+            return False, reason
+
+    # self.update_ACTIVES_OPCODE()
+
     def connect_2fa(self, sms_code):
         return self.connect(sms_code=sms_code)
 
-    def check_connect(self, retries=3, delay=5):
-        if global_value.check_websocket_if_connect:
+    def check_connect(self):
+        # True/False
+        # if not connected, sometimes it's None, sometimes its '0', so
+        # both will fall on this first case
+        if not global_value.check_websocket_if_connect:
+            return False
+        else:
             return True
-        
-        logging.warning("Conexão perdida. Tentando reconectar...")
-        for attempt in range(retries):
-            try:
-                connect_success, connect_reason = self.connect()
-                if connect_success:
-                    logging.info("Reconexão bem-sucedida.")
-                    return True
-                else:
-                    logging.error(f"Erro ao conectar: {connect_reason}")
-            except Exception as e:
-                logging.error(f"Erro ao tentar reconectar: {e}")
-            time.sleep(delay)
-        
-        logging.error("Falha ao reconectar após várias tentativas.")
-        return False
-
-    def api_error_handler(func):
-        def wrapper(*args, **kwargs):
-            self = args[0]
-            retries = kwargs.pop('retries', 3)
-            for attempt in range(retries):
-                try:
-                    return func(*args, **kwargs)
-                except requests.exceptions.ConnectionError:
-                    logging.error(f"Conexão perdida em {func.__name__}. Tentativa {attempt + 1} de {retries}.")
-                    self.connect()
-                except AttributeError as e:
-                    logging.error(f"Erro de atributo em {func.__name__}: {e}")
-                    self.connect()
-                except Exception as e:
-                    logging.error(f"Erro inesperado em {func.__name__}: {e}")
-                    if attempt < retries - 1:
-                        time.sleep(2 ** attempt)  # Exponential backoff
-                    else:
-                        raise
-            return None
-        return wrapper
-
-    def central_error_handler(self, error, method_name):
-        logging.error(f"Erro em {method_name}: {error}")
-        # Add recovery actions here
+        # wait for timestamp getting
 
     # _________________________UPDATE ACTIVES OPCODE_____________________
     def get_all_ACTIVES_OPCODE(self):
@@ -261,33 +204,20 @@ class IQ_Option:
             pass
         return self.api.leaderboard_deals_client
 
-    @api_error_handler                
-    def get_instruments(self, type, retries=3):
-        """
-        Busca instrumentos financeiros com suporte a reconexão.
-    
-        :param type: Tipo de instrumento ("crypto", "forex", "cfd").
-        :param retries: Número de tentativas em caso de falha.
-        :return: Lista de instrumentos ou None em caso de falha.
-        """
-        for attempt in range(retries):
+    def get_instruments(self, type):
+        # type="crypto"/"forex"/"cfd"
+        time.sleep(self.suspend)
+        self.api.instruments = None
+        while self.api.instruments == None:
             try:
-                self.ensure_connection()
-                self.api.instruments = None
                 self.api.get_instruments(type)
-    
                 start = time.time()
-                while self.api.instruments is None:
-                    if time.time() - start > 10:  # Timeout de 10 segundos
-                        raise TimeoutError("Tempo limite excedido para get_instruments")
-    
-                return self.api.instruments
-            except Exception as e:
-                logging.error(f"Tentativa {attempt + 1} falhou: {e}")
+                while self.api.instruments == None and time.time() - start < 10:
+                    pass
+            except:
+                logging.error('**error** api.get_instruments need reconnect')
                 self.connect()
-    
-        logging.error(f"Falha ao obter instrumentos do tipo {type} após várias tentativas.")
-        return None
+        return self.api.instruments
 
     def instruments_input_to_ACTIVES(self, type):
         instruments = self.get_instruments(type)
@@ -308,7 +238,6 @@ class IQ_Option:
 
     # _________________________self.api.get_api_option_init_all() wss______________________
     def get_all_init(self):
-        self.ensure_connection()     
 
         while True:
             self.api.api_option_init_all_result = None
@@ -322,7 +251,7 @@ class IQ_Option:
                     time.sleep(5)
             start = time.time()
             while True:
-                if time.time() - start > 300:
+                if time.time() - start > 30:
                     logging.error('**warning** get_all_init late 30 sec')
                     break
                 try:
@@ -345,7 +274,7 @@ class IQ_Option:
         self.api.get_api_option_init_all_v2()
         start_t = time.time()
         while self.api.api_option_init_all_result_v2 == None:
-            if time.time() - start_t >= 300:
+            if time.time() - start_t >= 30:
                 logging.error('**warning** get_all_init_v2 late 30 sec')
                 return None
         return self.api.api_option_init_all_result_v2
@@ -452,20 +381,23 @@ class IQ_Option:
 
     # ______________________________________self.api.getprofile() https________________________________
 
-    def get_profile_async(self, timeout=30):
-        """
-        Obtém o perfil do usuário de forma assíncrona com um tempo limite.
-        
-        :param timeout: Tempo máximo de espera em segundos.
-        :return: Dados do perfil ou None em caso de erro.
-        """
-        start_time = time.time()
-        while self.api.profile.msg is None:
-            if time.time() - start_time > timeout:
-                logging.error("Tempo limite excedido ao obter perfil.")
-                return None
-            time.sleep(0.1)
+    def get_profile_ansyc(self):
+        while self.api.profile.msg == None:
+            pass
         return self.api.profile.msg
+
+    """def get_profile(self):
+        while True:
+            try:
+
+                respon = self.api.getprofile().json()
+                time.sleep(self.suspend)
+
+                if respon["isSuccessful"] == True:
+                    return respon
+            except:
+                logging.error('**error** get_profile try reconnect')
+                self.connect()"""
 
     def get_currency(self):
         balances_raw = self.get_balances()
@@ -476,23 +408,25 @@ class IQ_Option:
     def get_balance_id(self):
         return global_value.balance_id
 
-    def get_balance(self, retries=3):
-        """
-        Obtém o saldo da conta atual, com retry em caso de falha.
-        
-        :param retries: Número de tentativas.
-        :return: Saldo atual ou None em caso de falha.
-        """
-        for attempt in range(retries):
+    """ def get_balance(self):
+        self.api.profile.balance = None
+        while True:
             try:
-                balances_raw = self.get_balances()
-                for balance in balances_raw["msg"]:
-                    if balance["id"] == global_value.balance_id:
-                        return balance["amount"]
-            except Exception as e:
-                logging.error(f"Erro ao obter saldo: {e}")
-                self.connect()
-        return None
+                respon = self.get_profile()
+                self.api.profile.balance = respon["result"]["balance"]
+                break
+            except:
+                logging.error('**error** get_balance()')
+
+            time.sleep(self.suspend)
+        return self.api.profile.balance"""
+
+    def get_balance(self):
+
+        balances_raw = self.get_balances()
+        for balance in balances_raw["msg"]:
+            if balance["id"] == global_value.balance_id:
+                return balance["amount"]
 
     def get_balances(self):
         self.api.balances_raw = None
@@ -575,41 +509,24 @@ class IQ_Option:
     # _______________________        CANDLE      _____________________________
     # ________________________self.api.getcandles() wss________________________
 
-    @api_error_handler
-    @circuit
-    def get_candles(self, ACTIVES, interval, count, endtime, retries=3):
-        """
-        Busca os dados de candles com suporte a reconexão.
-    
-        :param ACTIVES: Ativo financeiro.
-        :param interval: Intervalo de tempo do candle.
-        :param count: Número de candles.
-        :param endtime: Timestamp de término.
-        :param retries: Número de tentativas em caso de falha.
-        :return: Dados dos candles ou None em caso de falha.
-        """
-        for attempt in range(retries):
+    def get_candles(self, ACTIVES, interval, count, endtime):
+        self.api.candles.candles_data = None
+        while True:
             try:
-                self.ensure_connection()
-    
                 if ACTIVES not in OP_code.ACTIVES:
-                    raise ValueError(f"Ativo {ACTIVES} não encontrado.")
-    
-                self.api.candles.candles_data = None
-                self.api.getcandles(OP_code.ACTIVES[ACTIVES], interval, count, endtime)
-    
-                start = time.time()
-                while self.api.candles.candles_data is None:
-                    if time.time() - start > 30:  # Timeout de 30 segundos
-                        raise TimeoutError("Tempo limite excedido para get_candles")
-    
-                return self.api.candles.candles_data
-            except Exception as e:
-                logging.error(f"Tentativa {attempt + 1} falhou: {e}")
+                    print('Asset {} not found on consts'.format(ACTIVES))
+                    break
+                self.api.getcandles(
+                    OP_code.ACTIVES[ACTIVES], interval, count, endtime)
+                while self.check_connect and self.api.candles.candles_data == None:
+                    pass
+                if self.api.candles.candles_data != None:
+                    break
+            except:
+                logging.error('**error** get_candles need reconnect')
                 self.connect()
-    
-        logging.error("Falha ao obter candles após várias tentativas.")
-        return None
+
+        return self.api.candles.candles_data
 
     #######################################################
     # ______________________________________________________
@@ -910,14 +827,12 @@ class IQ_Option:
 
         return self.api.api_game_getoptions_result
 
-    def get_optioninfo_v2(self, limit, timeout=30):
+    def get_optioninfo_v2(self, limit):
+        self.api.get_options_v2_data = None
         self.api.get_options_v2(limit, "binary,turbo")
-        start_time = time.time()
-        while self.api.get_options_v2_data is None:
-            if time.time() - start_time > timeout:
-                logging.error("Tempo limite excedido ao obter opções.")
-                return None
-            time.sleep(0.1)
+        while self.api.get_options_v2_data == None:
+            pass
+
         return self.api.get_options_v2_data
 
     # __________________________BUY__________________________
@@ -978,52 +893,41 @@ class IQ_Option:
                 id = self.api.buy_multi_option[req_id]["id"]
             except:
                 pass
-            if time.time() - start_t >= 60:
+            if time.time() - start_t >= 5:
                 logging.error('**warning** buy late 5 sec')
                 return False, None
 
         return self.api.result, self.api.buy_multi_option[req_id]["id"]
 
-    def buy(self, price, ACTIVES, ACTION, expirations, retries=3):
-        """
-        Realiza uma compra com suporte a reconexão.
-    
-        :param price: Valor de compra.
-        :param ACTIVES: Ativo financeiro.
-        :param ACTION: Ação ("call" ou "put").
-        :param expirations: Tempo de expiração.
-        :param retries: Número de tentativas em caso de falha.
-        :return: Tuple (bool, id | mensagem de erro).
-        """
-        for attempt in range(retries):
+    def buy(self, price, ACTIVES, ACTION, expirations):
+        self.api.buy_multi_option = {}
+        self.api.buy_successful = None
+        # req_id = "buy"
+        req_id = str(randint(0, 10000))
+        try:
+            self.api.buy_multi_option[req_id]["id"] = None
+        except:
+            pass
+        self.api.buyv3(
+            float(price), OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
+        start_t = time.time()
+        id = None
+        self.api.result = None
+        while self.api.result == None or id == None:
             try:
-                self.ensure_connection()
-                self.api.buy_multi_option = {}
-                req_id = str(randint(0, 10000))
-    
-                self.api.buyv3(
-                    float(price),
-                    OP_code.ACTIVES[ACTIVES],
-                    str(ACTION),
-                    int(expirations),
-                    req_id
-                )
-    
-                start_t = time.time()
-                while self.api.result is None or req_id not in self.api.buy_multi_option:
-                    if time.time() - start_t > 60:  # Timeout de 60 segundos
-                        raise TimeoutError("Tempo limite excedido para buy")
-    
-                return True, self.api.buy_multi_option[req_id].get("id")
-            except Exception as e:
-                logging.error(f"Tentativa {attempt + 1} falhou: {e}")
-                self.connect()
+                if "message" in self.api.buy_multi_option[req_id].keys():
+                    return False, self.api.buy_multi_option[req_id]["message"]
+            except:
+                pass
+            try:
+                id = self.api.buy_multi_option[req_id]["id"]
+            except:
+                pass
+            if time.time() - start_t >= 5:
+                logging.error('**warning** buy late 5 sec')
+                return False, None
 
-            except Exception as e:
-                self.central_error_handler(e, "buy")
-                return False, "Erro ao comprar"                    
-        logging.error("Falha ao realizar a compra após várias tentativas.")
-        return False, "Erro ao comprar"
+        return self.api.result, self.api.buy_multi_option[req_id]["id"]
 
     def sell_option(self, options_ids):
         self.api.sell_option(options_ids)
@@ -1040,24 +944,17 @@ class IQ_Option:
         return self.api.sold_digital_options_respond
 # __________________for Digital___________________
 
-    def get_digital_underlying_list_data(self, retries=3):
-        for attempt in range(retries):
-            try:
-                self.api.get_digital_underlying()
-                start_time = time.time()
-                while self.api.underlying_list_data is None:
-                    if time.time() - start_time > 30:
-                        logging.error("Tempo limite excedido ao obter ativos digitais.")
-                        break
-                    time.sleep(0.1)
-                if self.api.underlying_list_data is not None:
-                    return self.api.underlying_list_data
-                else:
-                    logging.error("Dados de ativos digitais não obtidos.")
-            except Exception as e:
-                logging.error(f"Erro ao obter ativos digitais: {e}")
-                self.connect()
-        return None
+    def get_digital_underlying_list_data(self):
+        self.api.underlying_list_data = None
+        self.api.get_digital_underlying()
+        start_t = time.time()
+        while self.api.underlying_list_data == None:
+            if time.time() - start_t >= 30:
+                logging.error(
+                    '**warning** get_digital_underlying_list_data late 30 sec')
+                return None
+
+        return self.api.underlying_list_data
 
     def get_strike_list(self, ACTIVES, duration):
         self.api.strike_list = None
@@ -1090,14 +987,15 @@ class IQ_Option:
             pass
         return self.api.instrument_quotes_generated_raw_data[ACTIVE][duration * 60]
 
-    def get_realtime_strike_list(self, ACTIVE, duration, timeout=30):
-        start_time = time.time()
-        while not self.api.instrument_quites_generated_data.get(ACTIVE, {}).get(duration * 60, {}):
-            if time.time() - start_time > timeout:
-                logging.error("Tempo limite excedido ao obter lista de strikes em tempo real.")
-                return {}
-            time.sleep(0.1)
-        # Proceed to process data
+    def get_realtime_strike_list(self, ACTIVE, duration):
+        while True:
+            if not self.api.instrument_quites_generated_data[ACTIVE][duration * 60]:
+                pass
+            else:
+                break
+        """
+        strike_list dict: price:{call:id,put:id}
+        """
         ans = {}
         now_timestamp = self.api.instrument_quites_generated_timestamp[ACTIVE][duration * 60]
 
@@ -1282,7 +1180,7 @@ class IQ_Option:
         self.api.place_digital_option(instrument_id, amount)
         start_t = time.time()
         while self.api.digital_option_placed_id == None:
-            if time.time() - start_t > 120:
+            if time.time() - start_t > 30:
                 logging.error('buy_digital loss digital_option_placed_id')
                 return False, None
         return True, self.api.digital_option_placed_id
