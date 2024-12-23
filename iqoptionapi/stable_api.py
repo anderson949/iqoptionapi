@@ -85,19 +85,33 @@ class IQ_Option:
         self.SESSION_HEADER = header
         self.SESSION_COOKIE = cookie
                 
-    def connect(self, retries=3, delay=5):
+    def connect(self, retries=3, delay=5, sms_code=None):
+        """
+        Estabelece a conexão com o servidor da IQ Option.
+        """
         for attempt in range(retries):
             try:
+                # Inicializa a API
                 self.api = IQOptionAPI("iqoption.com", self.email, self.password)
-                check, reason = self.api.connect()
+                
+                # Configura sessão
+                self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
+                
+                # Autenticação 2FA (se necessário)
+                if sms_code is not None:
+                    self.api.setTokenSMS(self.resp_sms)
+                    check, reason = self.api.connect2fa(sms_code)
+                else:
+                    check, reason = self.api.connect()
+    
                 if check:
-                    logging.info("Conexão bem-sucedida.")
+                    logging.info("Conexão estabelecida com sucesso.")
                     return True, None
                 else:
-                    logging.error(f"Erro ao conectar: {reason}")
+                    logging.error(f"Falha ao conectar: {reason}")
                     return False, reason
             except Exception as e:
-                logging.error(f"Erro durante a conexão: {e}")
+                logging.error(f"Erro ao tentar conectar: {e}")
                 time.sleep(delay)
         return False, "Falha ao conectar após várias tentativas."
     
@@ -126,12 +140,8 @@ class IQ_Option:
         return self.connect(sms_code=sms_code)
 
     def check_connect(self, retries=3, delay=5):
-        """
-        Verifica a conectividade com a API. Caso a conexão esteja perdida, tenta reconectar.
-        """
         for attempt in range(retries):
             try:
-                # Verifica se a API está conectada verificando atributos existentes
                 if self.api and hasattr(self.api, "timesync") and self.api.timesync.server_timestamp:
                     return True
                 logging.warning(f"Tentativa de reconexão ({attempt + 1}/{retries})...")
@@ -139,7 +149,6 @@ class IQ_Option:
             except Exception as e:
                 logging.error(f"Erro ao tentar reconectar: {e}")
             time.sleep(delay)
-    
         logging.error("Falha ao reconectar após várias tentativas.")
         return False
 
