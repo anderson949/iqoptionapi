@@ -14,7 +14,7 @@ from iqoptionapi.expiration import get_expiration_time, get_remaning_time
 from iqoptionapi.version_control import api_version
 from datetime import datetime, timedelta
 from random import randint
-
+from circuitbreaker import circuit
 
 def nested_dict(n, type):
     if n == 1:
@@ -41,12 +41,18 @@ class IQ_Option:
         self.get_digital_spot_profit_after_sale_data = nested_dict(2, int)
         self.get_realtime_strike_list_temp_data = {}
         self.get_realtime_strike_list_temp_expiration = 0
+       
+        # In __init__ method
+        self.monitor_thread = threading.Thread(target=self.monitor_connection)
+        self.monitor_thread.daemon = True
+        self.monitor_thread.start()
+                
         self.SESSION_HEADER = {
             "User-Agent": r"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.139 Safari/537.36"}
         self.SESSION_COOKIE = {}
         #
         # --start
-        # self.connect()
+        self.connect()
         # this auto function delay too long
 
     # --------------------------------------------------------------------------
@@ -77,73 +83,32 @@ class IQ_Option:
     def set_session(self, header, cookie):
         self.SESSION_HEADER = header
         self.SESSION_COOKIE = cookie
-
-    def connect(self, retries=3, delay=5, sms_code=None):
-        """
-        Estabelece a conexão com o servidor da IQ Option, com suporte a reconexão
-        e autenticação 2FA (caso necessário).
-    
-        :param retries: Número de tentativas de reconexão em caso de falha.
-        :param delay: Intervalo (em segundos) entre tentativas.
-        :param sms_code: Código de autenticação 2FA, se aplicável.
-        :return: Tuple (bool, str | None) indicando sucesso e mensagem de erro (se houver).
-        """
+                
+    def connect(self, retries=5, delay=5, sms_code=None):
         for attempt in range(retries):
             try:
-                # Fecha conexão existente, se houver
-                if hasattr(self, 'api') and self.api:
-                    try:
-                        self.api.close()
-                    except Exception as e:
-                        logging.warning(f"Falha ao fechar conexão anterior: {e}")
-    
-                # Inicializa a API com credenciais
                 self.api = IQOptionAPI("iqoption.com", self.email, self.password)
-    
-                # Configura sessão
-                self.api.set_session(headers=self.SESSION_HEADER,
-                                     cookies=self.SESSION_COOKIE)
-    
-                # Autenticação 2FA (se necessário)
-                if sms_code is not None:
-                    self.api.setTokenSMS(self.resp_sms)
-                    status, reason = self.api.connect2fa(sms_code)
-                    if not status:
-                        return status, reason
-    
-                # Conecta ao servidor
+                self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
+                if sms_code:
+                    self.api.connect2fa(sms_code)
                 check, reason = self.api.connect()
-    
                 if check:
-                    # Reconecta streams e configurações após conexão
                     self.re_subscribe_stream()
-    
-                    # Espera até que o ID do saldo seja carregado
                     while global_value.balance_id is None:
                         time.sleep(0.1)
-    
-                    # Subscrição de mensagens e configurações adicionais
                     self.position_change_all("subscribeMessage", global_value.balance_id)
                     self.order_changed_all("subscribeMessage")
                     self.api.setOptions(1, True)
-    
                     logging.info("Conexão estabelecida com sucesso.")
                     return True, None
                 else:
-                    # Verifica se o erro exige 2FA
-                    if 'code' in json.loads(reason) and json.loads(reason)['code'] == 'verify':
-                        response = self.api.send_sms_code(json.loads(reason)['token'])
-                        if response.json().get('code') != 'success':
-                            return False, response.json().get('message')
-                        self.resp_sms = response
-                        return False, "2FA necessária"
-    
                     logging.error(f"Falha ao conectar: {reason}")
                     return False, reason
             except Exception as e:
                 logging.error(f"Erro durante a tentativa de conexão: {e}")
                 if attempt < retries - 1:
-                    logging.info(f"Tentativa {attempt + 1} falhou. Retentando em {delay} segundos...")
+                    delay = delay * (1.5 ** attempt)  # Exponential backoff
+                    logging.info(f"Tentativa {attempt + 1} falhou. Retentando em {delay:.2f} segundos...")
                     time.sleep(delay)
                 else:
                     logging.error("Todas as tentativas de conexão falharam.")
@@ -191,6 +156,32 @@ class IQ_Option:
         logging.error("Falha ao reconectar após várias tentativas.")
         return False
 
+    def api_error_handler(func):
+        def wrapper(*args, **kwargs):
+            self = args[0]
+            retries = kwargs.pop('retries', 3)
+            for attempt in range(retries):
+                try:
+                    return func(*args, **kwargs)
+                except requests.exceptions.ConnectionError:
+                    logging.error(f"Conexão perdida em {func.__name__}. Tentativa {attempt + 1} de {retries}.")
+                    self.connect()
+                except AttributeError as e:
+                    logging.error(f"Erro de atributo em {func.__name__}: {e}")
+                    self.connect()
+                except Exception as e:
+                    logging.error(f"Erro inesperado em {func.__name__}: {e}")
+                    if attempt < retries - 1:
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                    else:
+                        raise
+            return None
+        return wrapper
+
+    def central_error_handler(self, error, method_name):
+        logging.error(f"Erro em {method_name}: {error}")
+        # Add recovery actions here
+
     # _________________________UPDATE ACTIVES OPCODE_____________________
     def get_all_ACTIVES_OPCODE(self):
         return OP_code.ACTIVES
@@ -230,6 +221,7 @@ class IQ_Option:
             pass
         return self.api.leaderboard_deals_client
 
+    @api_error_handler                
     def get_instruments(self, type, retries=3):
         """
         Busca instrumentos financeiros com suporte a reconexão.
@@ -420,24 +412,15 @@ class IQ_Option:
 
     # ______________________________________self.api.getprofile() https________________________________
 
-    def get_profile_ansyc(self):
+    def get_profile_async(self, timeout=30):
+        start_time = time.time()
         while self.api.profile.msg is None:
+            if time.time() - start_time > timeout:
+                logging.error("Tempo limite excedido ao obter perfil.")
+                return None
             time.sleep(0.1)
         return self.api.profile.msg
 
-    def get_profile(self):
-        while True:
-            try:
-                response = self.api.getprofile().json()
-                time.sleep(self.suspend)
-                if response["isSuccessful"]:
-                    self.api.profile.msg = response
-                    return response
-            except Exception as e:
-                logging.error(f'Erro ao obter perfil: {e}')
-                self.connect()
-            time.sleep(self.suspend)
-        
     def get_currency(self):
         balances_raw = self.get_balances()
         for balance in balances_raw["msg"]:
@@ -447,25 +430,23 @@ class IQ_Option:
     def get_balance_id(self):
         return global_value.balance_id
 
-    """ def get_balance(self):
-        self.api.profile.balance = None
-        while True:
+    def get_balance(self, retries=3):
+        """
+        Obtém o saldo da conta atual, com retry em caso de falha.
+        
+        :param retries: Número de tentativas.
+        :return: Saldo atual ou None em caso de falha.
+        """
+        for attempt in range(retries):
             try:
-                respon = self.get_profile()
-                self.api.profile.balance = respon["result"]["balance"]
-                break
-            except:
-                logging.error('**error** get_balance()')
-
-            time.sleep(self.suspend)
-        return self.api.profile.balance"""
-
-    def get_balance(self):
-
-        balances_raw = self.get_balances()
-        for balance in balances_raw["msg"]:
-            if balance["id"] == global_value.balance_id:
-                return balance["amount"]
+                balances_raw = self.get_balances()
+                for balance in balances_raw["msg"]:
+                    if balance["id"] == global_value.balance_id:
+                        return balance["amount"]
+            except Exception as e:
+                logging.error(f"Erro ao obter saldo: {e}")
+                self.connect()
+        return None
 
     def get_balances(self):
         self.api.balances_raw = None
@@ -548,6 +529,8 @@ class IQ_Option:
     # _______________________        CANDLE      _____________________________
     # ________________________self.api.getcandles() wss________________________
 
+    @api_error_handler
+    @circuit
     def get_candles(self, ACTIVES, interval, count, endtime, retries=3):
         """
         Busca os dados de candles com suporte a reconexão.
@@ -881,12 +864,14 @@ class IQ_Option:
 
         return self.api.api_game_getoptions_result
 
-    def get_optioninfo_v2(self, limit):
-        self.api.get_options_v2_data = None
+    def get_optioninfo_v2(self, limit, timeout=30):
         self.api.get_options_v2(limit, "binary,turbo")
-        while self.api.get_options_v2_data == None:
-            pass
-
+        start_time = time.time()
+        while self.api.get_options_v2_data is None:
+            if time.time() - start_time > timeout:
+                logging.error("Tempo limite excedido ao obter opções.")
+                return None
+            time.sleep(0.1)
         return self.api.get_options_v2_data
 
     # __________________________BUY__________________________
@@ -987,7 +972,10 @@ class IQ_Option:
             except Exception as e:
                 logging.error(f"Tentativa {attempt + 1} falhou: {e}")
                 self.connect()
-    
+
+            except Exception as e:
+                self.central_error_handler(e, "buy")
+                return False, "Erro ao comprar"                    
         logging.error("Falha ao realizar a compra após várias tentativas.")
         return False, "Erro ao comprar"
 
@@ -1006,17 +994,24 @@ class IQ_Option:
         return self.api.sold_digital_options_respond
 # __________________for Digital___________________
 
-    def get_digital_underlying_list_data(self):
-        self.api.underlying_list_data = None
-        self.api.get_digital_underlying()
-        start_t = time.time()
-        while self.api.underlying_list_data == None:
-            if time.time() - start_t >= 300:
-                logging.error(
-                    '**warning** get_digital_underlying_list_data late 30 sec')
-                return None
-
-        return self.api.underlying_list_data
+    def get_digital_underlying_list_data(self, retries=3):
+        for attempt in range(retries):
+            try:
+                self.api.get_digital_underlying()
+                start_time = time.time()
+                while self.api.underlying_list_data is None:
+                    if time.time() - start_time > 30:
+                        logging.error("Tempo limite excedido ao obter ativos digitais.")
+                        break
+                    time.sleep(0.1)
+                if self.api.underlying_list_data is not None:
+                    return self.api.underlying_list_data
+                else:
+                    logging.error("Dados de ativos digitais não obtidos.")
+            except Exception as e:
+                logging.error(f"Erro ao obter ativos digitais: {e}")
+                self.connect()
+        return None
 
     def get_strike_list(self, ACTIVES, duration):
         self.api.strike_list = None
@@ -1049,15 +1044,14 @@ class IQ_Option:
             pass
         return self.api.instrument_quotes_generated_raw_data[ACTIVE][duration * 60]
 
-    def get_realtime_strike_list(self, ACTIVE, duration):
-        while True:
-            if not self.api.instrument_quites_generated_data[ACTIVE][duration * 60]:
-                pass
-            else:
-                break
-        """
-        strike_list dict: price:{call:id,put:id}
-        """
+    def get_realtime_strike_list(self, ACTIVE, duration, timeout=30):
+        start_time = time.time()
+        while not self.api.instrument_quites_generated_data.get(ACTIVE, {}).get(duration * 60, {}):
+            if time.time() - start_time > timeout:
+                logging.error("Tempo limite excedido ao obter lista de strikes em tempo real.")
+                return {}
+            time.sleep(0.1)
+        # Proceed to process data
         ans = {}
         now_timestamp = self.api.instrument_quites_generated_timestamp[ACTIVE][duration * 60]
 
@@ -1374,14 +1368,15 @@ class IQ_Option:
         return self.api.order_async[buy_order_id]
 
     def get_order(self, buy_order_id):
+        # self.api.order_data["status"]
+        # reject:you can not get this order
+        # pending_new:this order is working now
+        # filled:this order is ok now
+        # new
         self.api.order_data = None
         self.api.get_order(buy_order_id)
-        start_time = time.time()
-        while self.api.order_data is None:
-            if time.time() - start_time > 10:
-                logging.error('Tempo limite excedido ao obter ordem')
-                return False, None
-            time.sleep(0.1)
+        while self.api.order_data == None:
+            pass
         if self.api.order_data["status"] == 2000:
             return True, self.api.order_data["msg"]
         else:
