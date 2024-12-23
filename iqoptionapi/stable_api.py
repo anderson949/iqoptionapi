@@ -109,25 +109,37 @@ class IQ_Option:
                 raise ConnectionError(f"Erro ao conectar: {reason}")
             
     def monitor_connection(self):
+        """
+        Monitora continuamente a conexão com a API e tenta reconectar em caso de falha.
+        """
         while True:
             try:
                 if not self.check_connect():
-                    logging.warning("Conexão perdida. Tentando reconectar.")
+                    logging.warning("Conexão perdida. Tentando reconectar...")
                     self.connect()
-                time.sleep(30)  # Intervalo configurável
+                time.sleep(30)  # Intervalo de monitoramento
             except Exception as e:
-                logging.error(f"Erro no monitoramento da conexão: {e}")            
+                logging.error(f"Erro no monitoramento da conexão: {e}")
+                time.sleep(10)  # Evita loop rápido caso ocorra erro
             
     def connect_2fa(self, sms_code):
         return self.connect(sms_code=sms_code)
 
     def check_connect(self, retries=3, delay=5):
+        """
+        Verifica a conectividade com a API. Caso a conexão esteja perdida, tenta reconectar.
+        """
         for attempt in range(retries):
-            if self.api and self.api.check_websocket_if_connect:
-                return True
-            logging.warning(f"Tentativa de reconexão ({attempt + 1}/{retries})...")
-            self.connect()
+            try:
+                # Verifica se a API está conectada verificando atributos existentes
+                if self.api and hasattr(self.api, "timesync") and self.api.timesync.server_timestamp:
+                    return True
+                logging.warning(f"Tentativa de reconexão ({attempt + 1}/{retries})...")
+                self.connect()
+            except Exception as e:
+                logging.error(f"Erro ao tentar reconectar: {e}")
             time.sleep(delay)
+    
         logging.error("Falha ao reconectar após várias tentativas.")
         return False
 
