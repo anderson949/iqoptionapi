@@ -84,47 +84,81 @@ class IQ_Option:
         self.SESSION_HEADER = header
         self.SESSION_COOKIE = cookie
                 
-    def connect(self, retries=5, delay=5, sms_code=None):
+    def connect(self, retries=3, delay=5, sms_code=None):
         """
-        Estabelece a conexão com a API da IQ Option.
+        Estabelece a conexão com o servidor da IQ Option, com suporte a reconexão
+        e autenticação 2FA (caso necessário).
         
-        :param retries: Número máximo de tentativas de reconexão.
-        :param delay: Intervalo inicial entre tentativas (em segundos).
-        :param sms_code: Código 2FA, se necessário.
-        :return: True se conectado com sucesso, False caso contrário.
+        :param retries: Número de tentativas de reconexão em caso de falha.
+        :param delay: Intervalo (em segundos) entre tentativas.
+        :param sms_code: Código de autenticação 2FA, se aplicável.
+        :return: Tuple (bool, str | None) indicando sucesso e mensagem de erro (se houver).
         """
         for attempt in range(retries):
             try:
+                # Fecha conexão existente, se houver
+                if hasattr(self, 'api') and self.api:
+                    try:
+                        self.api.close()
+                    except Exception as e:
+                        logging.warning(f"Falha ao fechar conexão anterior: {e}")
+    
+                # Inicializa a API com credenciais
                 self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+    
+                # Configura sessão
                 self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
-                
-                if sms_code:
-                    self.api.connect2fa(sms_code)
-                
+    
+                # Autenticação 2FA (se necessário)
+                if sms_code is not None:
+                    self.api.setTokenSMS(self.resp_sms)
+                    status, reason = self.api.connect2fa(sms_code)
+                    if not status:
+                        return status, reason
+    
+                # Conecta ao servidor
                 check, reason = self.api.connect()
+    
                 if check:
-                    logging.info("Conectado com sucesso.")
-                    return True
+                    # Reconecta streams e configurações após conexão
+                    self.re_subscribe_stream()
+    
+                    # Espera até que o ID do saldo seja carregado
+                    while global_value.balance_id is None:
+                        time.sleep(0.1)
+    
+                    # Subscrição de mensagens e configurações adicionais
+                    self.position_change_all("subscribeMessage", global_value.balance_id)
+                    self.order_changed_all("subscribeMessage")
+                    self.api.setOptions(1, True)
+    
+                    logging.info("Conexão estabelecida com sucesso.")
+                    return True, None  # Retorna True e None para indicar sucesso
                 else:
+                    # Verifica se o erro exige 2FA
+                    if 'code' in json.loads(reason) and json.loads(reason)['code'] == 'verify':
+                        response = self.api.send_sms_code(json.loads(reason)['token'])
+                        if response.json().get('code') != 'success':
+                            return False, response.json().get('message')
+                        self.resp_sms = response
+                        return False, "2FA necessária"
+    
                     logging.error(f"Falha ao conectar: {reason}")
+                    return False, reason  # Retorna False e a mensagem de erro
             except Exception as e:
                 logging.error(f"Erro durante a tentativa de conexão: {e}")
-            
-            # Exponential backoff
-            delay *= 2 ** attempt
-            logging.warning(f"Tentativa {attempt + 1} falhou. Retentando em {delay} segundos...")
-            time.sleep(delay)
-        
-        logging.error("Todas as tentativas de conexão falharam.")
-        return False
+                if attempt < retries - 1:
+                    logging.info(f"Tentativa {attempt + 1} falhou. Retentando em {delay} segundos...")
+                    time.sleep(delay)
+                else:
+                    logging.error("Todas as tentativas de conexão falharam.")
+                    return False, str(e)  # Retorna False e a mensagem de erro
 
-    # self.update_ACTIVES_OPCODE()
     def ensure_connection(self):
-        """
-        Garante que a conexão com a API da IQ Option está ativa.
-        Se não estiver, tenta reconectar.
-        """
-        if not self.check_connect():
+        if not hasattr(self, 'api') or self.api is None:
+            logging.error("API não foi inicializada. Tentando conectar...")
+            self.connect()
+        elif not self.check_connect():
             logging.warning("Conexão perdida. Tentando reconectar...")
             self.connect()
             
