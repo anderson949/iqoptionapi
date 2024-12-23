@@ -158,10 +158,9 @@ class IQ_Option:
     def ensure_connection(self):
         if not hasattr(self, 'api') or self.api is None:
             logging.error("API não foi inicializada. Tentando conectar...")
-            self.connect()
-        elif not self.check_connect():
-            logging.warning("Conexão perdida. Tentando reconectar...")
-            self.connect()
+            success, reason = self.connect()
+            if not success:
+                raise ConnectionError(f"Erro ao conectar: {reason}")
             
     def monitor_connection(self):
         while True:
@@ -177,22 +176,12 @@ class IQ_Option:
         return self.connect(sms_code=sms_code)
 
     def check_connect(self, retries=3, delay=5):
-        if global_value.check_websocket_if_connect:
-            return True
-        
-        logging.warning("Conexão perdida. Tentando reconectar...")
         for attempt in range(retries):
-            try:
-                connect_success, connect_reason = self.connect()
-                if connect_success:
-                    logging.info("Reconexão bem-sucedida.")
-                    return True
-                else:
-                    logging.error(f"Erro ao conectar: {connect_reason}")
-            except Exception as e:
-                logging.error(f"Erro ao tentar reconectar: {e}")
+            if self.api and self.api.check_websocket_if_connect:
+                return True
+            logging.warning(f"Tentativa de reconexão ({attempt + 1}/{retries})...")
+            self.connect()
             time.sleep(delay)
-        
         logging.error("Falha ao reconectar após várias tentativas.")
         return False
 
