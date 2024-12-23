@@ -27,36 +27,17 @@ class IQ_Option:
     __version__ = api_version
 
     def __init__(self, email, password, active_account_type="PRACTICE"):
-        self.size = [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800,
-                     3600, 7200, 14400, 28800, 43200, 86400, 604800, 2592000]
+        self.api = None
         self.email = email
         self.password = password
-        self.suspend = 0.5
-        self.thread = None
-        self.subscribe_candle = []
-        self.subscribe_candle_all_size = []
-        self.subscribe_mood = []
-        self.subscribe_indicators = []
-        # for digit
-        self.get_digital_spot_profit_after_sale_data = nested_dict(2, int)
-        self.get_realtime_strike_list_temp_data = {}
-        self.get_realtime_strike_list_temp_expiration = 0
-       
-        # In __init__ method
+        self.active_account_type = active_account_type
+        self.SESSION_HEADER = {
+            "User-Agent": r"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.139 Safari/537.36"
+        }
+        self.SESSION_COOKIE = {}
         self.monitor_thread = threading.Thread(target=self.monitor_connection)
         self.monitor_thread.daemon = True
         self.monitor_thread.start()
-                
-        self.SESSION_HEADER = {
-            "User-Agent": r"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.139 Safari/537.36"}
-        self.SESSION_COOKIE = {}
-        #self.api = None
-        #
-        # --start
-        #self.connect()
-        # this auto function delay too long
-
-    # --------------------------------------------------------------------------
 
     def get_server_timestamp(self):
         return self.api.timesync.server_timestamp
