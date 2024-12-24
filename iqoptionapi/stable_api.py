@@ -890,53 +890,36 @@ class IQ_Option:
         del self.api.order_binary[order_id]
         return your_order
 
-    def check_win(self, id_number):
-        # 'win':win money 'equal':no win no loose   'loose':loose money
-        while True:
-            try:
-                listinfodata_dict = self.api.listinfodata.get(id_number)
-                if listinfodata_dict["game_state"] == 1:
-                    break
-            except:
-                pass
-        self.api.listinfodata.delete(id_number)
-        return listinfodata_dict["win"]
-
-    def check_win_v2(self, id_number, polling_time):
-        while True:
-            check, data = self.get_betinfo(id_number)
-            win = data["result"]["data"][str(id_number)]["win"]
-            if check and win != "":
-                try:
-
-                    return data["result"]["data"][str(id_number)]["profit"] - data["result"]["data"][str(id_number)][
-                        "deposit"]
-                except:
-                    pass
-            time.sleep(polling_time)
-
-        # Function by kkagill ( https://github.com/Lu-Yi-Hsun/iqoptionapi/issues/196 | https://github.com/kkagill )
-        # Function only work with Options!
-
     def check_win_v4(self, id_number):
+        """
+        Verifica o resultado de uma operação com base no ID da ordem.
+    
+        Este método aguarda até que a operação seja encerrada e retorna
+        o status final (win, loss, equal) e o lucro/prejuízo.
+    
+        Parâmetros:
+            id_number (int): ID da ordem enviada.
+    
+        Retorna:
+            tuple: 
+                - (str): Status da operação ("win", "loss", "equal").
+                - (float): Lucro ou prejuízo da operação.
+        """
         while True:
             try:
-                if self.api.socket_option_closed[id_number] != None:
+                if self.api.socket_option_closed[id_number] is not None:
                     break
-            except:
+            except Exception:
                 pass
-        x = self.api.socket_option_closed[id_number]
-        return x['msg']['win'], (0 if x['msg']['win'] == 'equal' else float(x['msg']['sum']) * -1 if x['msg']['win'] == 'loose' else float(x['msg']['win_amount']) - float(x['msg']['sum']))
-
-    def check_win_v3(self, id_number):
-        while True:
-            result = self.get_optioninfo_v2(10)
-            if result['msg']['closed_options'][0]['id'][0] == id_number and result['msg']['closed_options'][0]['id'][0] != None:
-                return result['msg']['closed_options'][0]['win'], (result['msg']['closed_options'][0]['win_amount'] - result['msg']['closed_options'][0]['amount'] if result['msg']['closed_options'][0]['win'] != 'equal' else 0)
-                break
-            time.sleep(1)
-
-    # -------------------get infomation only for binary option------------------------
+    
+        result = self.api.socket_option_closed[id_number]
+        return (
+            result["msg"]["win"],
+            (0 if result["msg"]["win"] == "equal"
+             else float(result["msg"]["sum"]) * -1
+             if result["msg"]["win"] == "loose"
+             else float(result["msg"]["win_amount"]) - float(result["msg"]["sum"]))
+        )
 
     def get_betinfo(self, id_number):
         # INPUT:int
@@ -1044,25 +1027,16 @@ class IQ_Option:
 
     def buy(self, price, ACTIVES, ACTION, expirations):
         """
-        Realiza a compra de uma opção.
-    
-        Este método executa uma compra para o ativo especificado com os 
-        parâmetros de preço, direção e tempo de expiração fornecidos. 
-        Em caso de falha, reconecta automaticamente e tenta novamente.
+        Realiza a compra de uma opção e aguarda o resultado.
     
         Parâmetros:
-            price (float): Valor a ser investido na compra.
+            price (float): Valor a ser investido.
             ACTIVES (str): Nome do ativo (exemplo: "EURUSD").
             ACTION (str): Direção da operação, "call" (compra) ou "put" (venda).
             expirations (int): Tempo de expiração em segundos.
     
         Retorna:
-            tuple: 
-                - (bool, dict): Indicando sucesso e os detalhes da ordem.
-                - (bool, str): Indicando falha e uma mensagem de erro.
-    
-        Exceções:
-            TimeoutError: Lançada se o tempo limite de espera for excedido.
+            dict: Resultado da operação contendo ID, status e lucro/prejuízo.
         """
         self.api.buy_multi_option = {}
         req_id = str(randint(0, 10000))
@@ -1070,17 +1044,21 @@ class IQ_Option:
         max_attempts = 3
         for attempt in range(max_attempts):
             try:
+                # Envia a ordem
                 self.api.buyv3(float(price), OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
     
-                # Aguardar resposta com limite de tempo
+                # Aguarda confirmação da ordem
                 start_time = time.time()
                 timeout = 5
                 while time.time() - start_time <= timeout:
                     if req_id in self.api.buy_multi_option:
                         order = self.api.buy_multi_option[req_id]
                         if "id" in order:
-                            #print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
-                            return True, {"id": order["id"], "result": self.api.result}
+                            print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
+                            order_id = order["id"]
+    
+                            # Aguardar o resultado da operação
+                            return self._wait_for_result(order_id)
                         if "message" in order:
                             raise ValueError(order["message"])
                     time.sleep(0.1)
@@ -1093,7 +1071,7 @@ class IQ_Option:
                 time.sleep(2 ** attempt)
     
         print(f"[FALHA] Não foi possível realizar a compra para {ACTIVES} após {max_attempts} tentativas.")
-        return False, "Erro após múltiplas tentativas"
+        return {"status": "error", "message": "Falha após múltiplas tentativas"}
 
     def sell_option(self, options_ids):
         """
