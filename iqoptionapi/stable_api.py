@@ -1041,7 +1041,7 @@ class IQ_Option:
         self.api.buy_multi_option = {}
         req_id = str(randint(0, 10000))
     
-        max_attempts = 3
+        max_attempts = 3  # Número máximo de tentativas para enviar a ordem
         for attempt in range(max_attempts):
             try:
                 # Envia a ordem
@@ -1057,8 +1057,13 @@ class IQ_Option:
                             print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
                             order_id = order["id"]
     
-                            # Aguardar o resultado da operação
-                            return self._wait_for_result(order_id)
+                            # Verifica o resultado usando check_win_v4
+                            status, payout = self.check_win_v4(order_id)
+                            return {
+                                "id": order_id,
+                                "status": status,
+                                "payout": payout
+                            }
                         if "message" in order:
                             raise ValueError(order["message"])
                     time.sleep(0.1)
@@ -1399,36 +1404,29 @@ class IQ_Option:
             pass
         return self.api.result
 
-    def check_win_digital(self, buy_order_id, polling_time):
-        while True:
-            time.sleep(polling_time)
-            data = self.get_digital_position(buy_order_id)
-
-            if data["msg"]["position"]["status"] == "closed":
-                if data["msg"]["position"]["close_reason"] == "default":
-                    return data["msg"]["position"]["pnl_realized"]
-                elif data["msg"]["position"]["close_reason"] == "expired":
-                    return data["msg"]["position"]["pnl_realized"] - data["msg"]["position"]["buy_amount"]
-
     def check_win_digital_v2(self, buy_order_id):
-
+        """
+        Verifica o resultado de uma operação digital com base no ID da ordem.
+    
+        Parâmetros:
+            buy_order_id (int): ID da ordem enviada.
+    
+        Retorna:
+            tuple: 
+                - (bool): True se o resultado foi obtido com sucesso, False caso contrário.
+                - (float): Lucro ou prejuízo da operação.
+        """
         while self.get_async_order(buy_order_id)["position-changed"] == {}:
             pass
-        order_data = self.get_async_order(
-            buy_order_id)["position-changed"]["msg"]
-        if order_data != None:
+    
+        order_data = self.get_async_order(buy_order_id)["position-changed"]["msg"]
+        if order_data is not None:
             if order_data["status"] == "closed":
                 if order_data["close_reason"] == "expired":
                     return True, order_data["close_profit"] - order_data["invest"]
                 elif order_data["close_reason"] == "default":
                     return True, order_data["pnl_realized"]
-            else:
-                return False, None
-        else:
-            return False, None
-
-    # ----------------------------------------------------------
-    # -----------------BUY_for__Forex__&&__stock(cfd)__&&__ctrpto
+        return False, None
 
     def buy_order(self,
                   instrument_type, instrument_id,
@@ -1769,45 +1767,68 @@ class IQ_Option:
         self.api.logout()
 
     def buy_digital_spot_v2(self, active, amount, action, duration):
+        """
+        Realiza a compra de uma opção digital e aguarda o resultado.
+    
+        Parâmetros:
+            active (str): Nome do ativo, por exemplo, "EURUSD".
+            amount (float): Quantia a ser investida.
+            action (str): Direção da operação, "call" ou "put".
+            duration (int): Duração da operação em minutos.
+    
+        Retorna:
+            dict: Resultado da operação contendo ID, status e lucro/prejuízo.
+        """
         action = action.lower()
-
-        if action == 'put':
-            action = 'P'
-        elif action == 'call':
-            action = 'C'
-        else:
-            logging.error('buy_digital_spot_v2 active error')
-            return -1, None
-
-        timestamp = int(self.api.timesync.server_timestamp)
-
-        if duration == 1:
-            exp, _ = get_expiration_time(timestamp, duration)
-        else:
-            now_date = datetime.fromtimestamp(
-                timestamp) + timedelta(minutes=1, seconds=30)
-
-            while True:
-                if now_date.minute % duration == 0 and time.mktime(now_date.timetuple()) - timestamp > 30:
-                    break
-                now_date = now_date + timedelta(minutes=1)
-
-            exp = time.mktime(now_date.timetuple())
-
-        date_formated = str(datetime.utcfromtimestamp(exp).strftime("%Y%m%d%H%M"))
-        active_id = str(OP_code.ACTIVES[active])
-        instrument_id = "do" + active_id + "A" + \
-            date_formated[:8] + "D" + date_formated[8:] + \
-            "00T" + str(duration) + "M" + action + "SPT"
-        logger = logging.getLogger(__name__)
-        logger.info(instrument_id)
-        request_id = self.api.place_digital_option_v2(instrument_id, active_id, amount)
-
-        while self.api.digital_option_placed_id.get(request_id) is None:
-            pass
-
-        digital_order_id = self.api.digital_option_placed_id.get(request_id)
-        if isinstance(digital_order_id, int):
-            return True, digital_order_id
-        else:
-            return False, digital_order_id
+        if action not in ["put", "call"]:
+            print(f"[ERRO] Ação inválida '{action}'. Use 'call' ou 'put'.")
+            return {"status": "error", "message": "Ação inválida"}
+    
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                timestamp = int(self.api.timesync.server_timestamp)
+                if duration == 1:
+                    exp, _ = get_expiration_time(timestamp, duration)
+                else:
+                    now_date = datetime.fromtimestamp(timestamp) + timedelta(minutes=1, seconds=30)
+                    while now_date.minute % duration != 0 or time.mktime(now_date.timetuple()) - timestamp <= 30:
+                        now_date += timedelta(minutes=1)
+                    exp = time.mktime(now_date.timetuple())
+    
+                date_formatted = datetime.utcfromtimestamp(exp).strftime("%Y%m%d%H%M")
+                instrument_id = f"do{active}{date_formatted}PT{duration}M{'P' if action == 'put' else 'C'}SPT"
+    
+                request_id = self.api.place_digital_option(instrument_id, amount)
+    
+                # Aguarda resposta da API
+                start_time = time.time()
+                timeout = 10
+                while time.time() - start_time <= timeout:
+                    if request_id in self.api.digital_option_placed_id:
+                        digital_order_id = self.api.digital_option_placed_id[request_id]
+                        if isinstance(digital_order_id, int):
+                            print(f"[SUCESSO] Compra realizada para o ativo {active}. Ordem ID: {digital_order_id}")
+    
+                            # Verifica o resultado usando check_win_digital_v2
+                            success, payout = self.check_win_digital_v2(digital_order_id)
+                            if success:
+                                return {
+                                    "id": digital_order_id,
+                                    "status": "closed",
+                                    "payout": payout
+                                }
+                            else:
+                                return {"status": "error", "message": "Falha ao obter o resultado"}
+    
+                        return {"status": "error", "message": digital_order_id}
+    
+                raise TimeoutError(f"Compra de {active} excedeu o tempo limite.")
+    
+            except Exception as e:
+                print(f"[AVISO] Tentativa {attempt + 1} falhou ao comprar {active}: {e}. Reconectando...")
+                self.connect()
+                time.sleep(2 ** attempt)
+    
+        print(f"[FALHA] Não foi possível realizar a compra para {active} após {max_attempts} tentativas.")
+        return {"status": "error", "message": "Falha após múltiplas tentativas"}
