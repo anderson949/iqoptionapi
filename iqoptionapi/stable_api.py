@@ -425,7 +425,7 @@ class IQ_Option:
                         raise TimeoutError("Tempo excedido ao obter perfil do usuário.")
                     time.sleep(0.1)
     
-                print("[SUCESSO] Perfil do usuário obtido com sucesso.")
+                #print("[SUCESSO] Perfil do usuário obtido com sucesso.")
                 return self.api.profile.msg
     
             except Exception as e:
@@ -587,7 +587,7 @@ class IQ_Option:
                     time.sleep(0.1)
     
                 # Dados recebidos com sucesso
-                print(f"[SUCESSO] Dados de candles para {ACTIVES} obtidos com sucesso.")
+                #print(f"[SUCESSO] Dados de candles para {ACTIVES} obtidos com sucesso.")
                 return self.api.candles.candles_data
     
             except Exception as e:
@@ -1055,7 +1055,7 @@ class IQ_Option:
                     if req_id in self.api.buy_multi_option:
                         order = self.api.buy_multi_option[req_id]
                         if "id" in order:
-                            print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
+                            #print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
                             return True, {"id": order["id"], "result": self.api.result}
                         if "message" in order:
                             raise ValueError(order["message"])
@@ -1102,7 +1102,7 @@ class IQ_Option:
                         raise TimeoutError(f"Venda de opções {options_ids} excedeu o tempo limite.")
                     time.sleep(0.1)
     
-                print(f"[SUCESSO] Opções {options_ids} vendidas com sucesso.")
+                #print(f"[SUCESSO] Opções {options_ids} vendidas com sucesso.")
                 return self.api.sold_options_respond
     
             except Exception as e:
