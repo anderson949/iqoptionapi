@@ -95,34 +95,38 @@ class IQ_Option:
     def set_session(self, header, cookie):
         self.SESSION_HEADER = header
         self.SESSION_COOKIE = cookie
-        
+            
     def connect(self, sms_code=None):
         """
-        Estabelece ou reestabelece a conexão com a API.
+        Estabelece ou reestabelece a conexão com a API da IQ Option.
+        Retorna (status, reason) onde:
+          - status: True/False indicando sucesso ou falha
+          - reason: Mensagem explicativa
         """
         try:
+            # Fecha conexões anteriores, se existirem
             if hasattr(self, 'api') and self.api:
                 self.api.close()
             self.api = IQOptionAPI("iqoption.com", self.email, self.password)
             
+            # Autenticação 2FA (se necessário)
             if sms_code:
                 self.api.setTokenSMS(self.resp_sms)
                 status, reason = self.api.connect2fa(sms_code)
-                if not status:
-                    print(f"[ERRO] Autenticação 2FA falhou: {reason}")
-                    return False
+                return status, reason
             
-            check, reason = self.api.connect()
-            if check:
+            # Conexão padrão
+            status, reason = self.api.connect()
+            if status:
                 print("[SUCESSO] Conexão estabelecida.")
                 self._initialize_subscriptions()
-                return True
+                return True, "Conexão estabelecida com sucesso."
             else:
-                print(f"[FALHA] Conexão não pôde ser estabelecida: {reason}")
-                return False
+                print(f"[FALHA] Não foi possível conectar: {reason}")
+                return False, reason
         except Exception as e:
             print(f"[ERRO] Falha ao conectar: {e}")
-            return False
+            return False, str(e)
             
     def disconnect(self):
         """
@@ -160,19 +164,21 @@ class IQ_Option:
 
     def ensure_connection(self):
         """
-        Garante que a conexão com a API está ativa. Se estiver fechada, tenta reconectar.
+        Garante que a conexão com a API está ativa.
+        Tenta reconectar automaticamente caso esteja desconectada.
+        Retorna (status, reason).
         """
         try:
-            if not global_value.check_websocket_if_connect:
+            if not hasattr(self, 'api') or not global_value.check_websocket_if_connect:
                 print("[AVISO] Conexão perdida. Tentando reconectar...")
-                self.connect()
-                if global_value.check_websocket_if_connect:
-                    print("[SUCESSO] Reconexão bem-sucedida.")
-                else:
-                    raise ConnectionError("[FALHA] Não foi possível reconectar.")
+                status, reason = self.connect()
+                if not status:
+                    return False, f"Reconexão falhou: {reason}"
+                return True, "Reconexão bem-sucedida."
+            return True, "Conexão ativa."
         except Exception as e:
             print(f"[ERRO] Falha ao garantir a conexão: {e}")
-            raise              
+            return False, str(e)
                                           
     def _initialize_subscriptions(self):
         """
