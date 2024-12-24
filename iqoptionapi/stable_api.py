@@ -864,9 +864,10 @@ class IQ_Option:
 
     def check_win_v4(self, id_number):
         """
-        Verifica o resultado de uma operação.
+        Verifica o resultado de uma operação com base no ID da ordem.
+        Aguarda até que o resultado seja retornado, respeitando um limite de 60 segundos.
         """
-        timeout = 60  # Tempo limite de 60 segundos
+        timeout = 60  # Tempo máximo de espera (em segundos)
         start_time = time.time()
         
         while time.time() - start_time <= timeout:
@@ -875,18 +876,24 @@ class IQ_Option:
                 if result and "msg" in result:
                     msg = result["msg"]
                     win_status = msg.get("win", "undefined")
-                    profit = float(msg.get("win_amount", 0.0)) - float(msg.get("sum", 0.0))
+                    
+                    # Determina o lucro ou prejuízo
                     if win_status == "equal":
-                        return win_status, 0.0
-                    elif win_status == "win":
-                        return win_status, profit
+                        return "equal", 0.0
                     elif win_status == "loose":
-                        return win_status, -float(msg.get("sum", 0.0))
+                        loss = -float(msg.get("sum", 0.0))
+                        return "loose", loss
+                    elif win_status == "win":
+                        profit = float(msg.get("win_amount", 0.0)) - float(msg.get("sum", 0.0))
+                        return "win", profit
+            except KeyError:
+                pass  # Continua aguardando o resultado
             except Exception as e:
                 print(f"[ERRO] Falha ao verificar resultado: {e}")
-            time.sleep(0.1)
+            time.sleep(1)  # Aguarda 1 segundo antes da próxima tentativa
         
-        print(f"[FALHA] Tempo limite excedido para ordem {id_number}.")
+        # Caso o tempo limite seja excedido
+        print(f"[FALHA] Tempo limite excedido para a ordem {id_number}.")
         return "timeout", 0.0
     
     def check_result_forex(self, order_id):
