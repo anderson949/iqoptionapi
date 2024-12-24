@@ -1134,7 +1134,9 @@ class IQ_Option:
                 raise ValueError(order.get("message", "Erro desconhecido."))
         except Exception as e:
             print(f"[ERRO] Falha ao realizar compra: {e}")
-            return {"status": "error", "message": str(e)}def buy(self, price, ACTIVES, ACTION, expirations):
+            return {"status": "error", "message": str(e)}
+            
+    def buy(self, price, ACTIVES, ACTION, expirations):
         """
         Realiza a compra de uma opção.
         """
