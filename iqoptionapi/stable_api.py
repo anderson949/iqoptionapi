@@ -95,36 +95,85 @@ class IQ_Option:
     def set_session(self, header, cookie):
         self.SESSION_HEADER = header
         self.SESSION_COOKIE = cookie
-    
+        
     def connect(self, sms_code=None):
         """
-        Conecta-se à API com tratamento de reconexões.
+        Estabelece ou reestabelece a conexão com a API.
         """
-        max_attempts = 3  # Máximo de 3 tentativas
-        for attempt in range(max_attempts):
-            try:
-                if hasattr(self, 'api') and self.api:
-                    self.api.close()
-                self.api = IQOptionAPI("iqoption.com", self.email, self.password)
-                
-                if sms_code:
-                    self.api.setTokenSMS(self.resp_sms)
-                    status, reason = self.api.connect2fa(sms_code)
-                    if not status:
-                        print(f"[ERRO] Autenticação 2FA falhou: {reason}")
-                        return status, reason
-                
-                check, reason = self.api.connect()
-                if check:
-                    print("[SUCESSO] Conexão estabelecida.")
-                    self._initialize_subscriptions()
-                    return True, None
-            except Exception as e:
-                print(f"[AVISO] Tentativa {attempt + 1} falhou: {e}")
-                time.sleep(2 ** attempt)  # Espera exponencial
-        
-        return False, "Falha após múltiplas tentativas de conexão"
-    
+        try:
+            if hasattr(self, 'api') and self.api:
+                self.api.close()
+            self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+            
+            if sms_code:
+                self.api.setTokenSMS(self.resp_sms)
+                status, reason = self.api.connect2fa(sms_code)
+                if not status:
+                    print(f"[ERRO] Autenticação 2FA falhou: {reason}")
+                    return False
+            
+            check, reason = self.api.connect()
+            if check:
+                print("[SUCESSO] Conexão estabelecida.")
+                self._initialize_subscriptions()
+                return True
+            else:
+                print(f"[FALHA] Conexão não pôde ser estabelecida: {reason}")
+                return False
+        except Exception as e:
+            print(f"[ERRO] Falha ao conectar: {e}")
+            return False
+            
+    def disconnect(self):
+        """
+        Encerra a conexão com a API de forma segura.
+        """
+        try:
+            if hasattr(self, 'api') and self.api:
+                self.api.close()
+            print("[INFO] Conexão encerrada com sucesso.")
+        except Exception as e:
+            print(f"[ERRO] Falha ao encerrar conexão: {e}")       
+ 
+    def keep_connection_alive(self):
+        """
+        Garante que a conexão com a API seja persistente e resiliente a desconexões.
+        """
+        try:
+            while True:  # Loop infinito para persistência
+                if not global_value.check_websocket_if_connect:
+                    print("[AVISO] Conexão perdida. Tentando reconectar...")
+                    self.connect()
+                    if global_value.check_websocket_if_connect:
+                        print("[SUCESSO] Reconexão bem-sucedida.")
+                    else:
+                        print("[FALHA] Reconexão falhou. Tentando novamente em 5 segundos...")
+                        time.sleep(5)  # Pausa antes de tentar reconectar novamente
+                else:
+                    print("[INFO] Conexão ativa. Monitorando...")
+                    time.sleep(10)  # Monitoramento periódico (10 segundos)
+        except KeyboardInterrupt:
+            print("\n[INFO] Encerramento solicitado pelo operador.")
+            self.disconnect()
+        except Exception as e:
+            print(f"[ERRO] Ocorreu um erro inesperado: {e}")
+
+    def ensure_connection(self):
+        """
+        Garante que a conexão com a API está ativa. Se estiver fechada, tenta reconectar.
+        """
+        try:
+            if not global_value.check_websocket_if_connect:
+                print("[AVISO] Conexão perdida. Tentando reconectar...")
+                self.connect()
+                if global_value.check_websocket_if_connect:
+                    print("[SUCESSO] Reconexão bem-sucedida.")
+                else:
+                    raise ConnectionError("[FALHA] Não foi possível reconectar.")
+        except Exception as e:
+            print(f"[ERRO] Falha ao garantir a conexão: {e}")
+            raise              
+                                          
     def _initialize_subscriptions(self):
         """
         Inicializa as assinaturas após a conexão bem-sucedida.
@@ -351,19 +400,19 @@ class IQ_Option:
 
     def get_all_open_time(self):
         """
-        Verifica a abertura de todos os mercados (binary, digital e outros), com tratamento de erros.
+        Verifica a abertura de todos os mercados (binary, digital e outros).
         """
+        self.ensure_connection()  # Verifica e reconecta se necessário
         self.OPEN_TIME = nested_dict(3, dict)
-    
+        
         try:
             # Execução sequencial para maior controle
             self.__get_binary_open()
             self.__get_digital_open()
             self.__get_other_open()
-    
         except Exception as e:
             print(f"[ERRO] Falha ao verificar ativos abertos: {e}")
-    
+        
         return self.OPEN_TIME
 
     def get_binary_option_detail(self):
@@ -865,19 +914,18 @@ class IQ_Option:
     def check_win_v4(self, id_number):
         """
         Verifica o resultado de uma operação com base no ID da ordem.
-        Aguarda até que o resultado seja retornado, respeitando um limite de 60 segundos.
         """
-        timeout = 60  # Tempo máximo de espera (em segundos)
+        timeout = 60
         start_time = time.time()
         
         while time.time() - start_time <= timeout:
+            self.ensure_connection()  # Verifica e reconecta se necessário
+            
             try:
                 result = self.api.socket_option_closed.get(id_number)
                 if result and "msg" in result:
                     msg = result["msg"]
                     win_status = msg.get("win", "undefined")
-                    
-                    # Determina o lucro ou prejuízo
                     if win_status == "equal":
                         return "equal", 0.0
                     elif win_status == "loose":
@@ -887,12 +935,11 @@ class IQ_Option:
                         profit = float(msg.get("win_amount", 0.0)) - float(msg.get("sum", 0.0))
                         return "win", profit
             except KeyError:
-                pass  # Continua aguardando o resultado
+                pass
             except Exception as e:
                 print(f"[ERRO] Falha ao verificar resultado: {e}")
-            time.sleep(1)  # Aguarda 1 segundo antes da próxima tentativa
+            time.sleep(1)
         
-        # Caso o tempo limite seja excedido
         print(f"[FALHA] Tempo limite excedido para a ordem {id_number}.")
         return "timeout", 0.0
     
@@ -1065,25 +1112,46 @@ class IQ_Option:
 
     def buy(self, price, ACTIVES, ACTION, expirations):
         """
-        Realiza a compra de uma opção e aguarda o resultado.
+        Realiza a compra de uma opção.
         """
-        try:
-            price = float(price)  # Confirma que price é um float
-            self.api.buy_multi_option = {}
-            req_id = str(randint(0, 10000))
+        self.ensure_connection()  # Verifica e reconecta se necessário
     
-            # Envia a ordem
-            self.api.buyv3(price, OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
+        try:
+            req_id = str(randint(0, 10000))
+            self.api.buyv3(float(price), OP_code.ACTIVES[ACTIVES], ACTION, expirations, req_id)
             
-            # Aguarda a resposta
             start_time = time.time()
             while req_id not in self.api.buy_multi_option:
-                if time.time() - start_time > 5:  # Timeout de 5 segundos
-                    raise TimeoutError(f"Compra de {ACTIVES} excedeu o tempo limite.")
+                if time.time() - start_time > 10:
+                    raise TimeoutError(f"Tempo limite excedido para ordem em {ACTIVES}.")
                 time.sleep(0.1)
+            
+            order = self.api.buy_multi_option.get(req_id)
+            if order and "id" in order:
+                print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
+                return {"status": "success", "id": order["id"]}
+            else:
+                raise ValueError(order.get("message", "Erro desconhecido."))
+        except Exception as e:
+            print(f"[ERRO] Falha ao realizar compra: {e}")
+            return {"status": "error", "message": str(e)}def buy(self, price, ACTIVES, ACTION, expirations):
+        """
+        Realiza a compra de uma opção.
+        """
+        self.ensure_connection()  # Verifica e reconecta se necessário
     
-            order = self.api.buy_multi_option[req_id]
-            if "id" in order:
+        try:
+            req_id = str(randint(0, 10000))
+            self.api.buyv3(float(price), OP_code.ACTIVES[ACTIVES], ACTION, expirations, req_id)
+            
+            start_time = time.time()
+            while req_id not in self.api.buy_multi_option:
+                if time.time() - start_time > 10:
+                    raise TimeoutError(f"Tempo limite excedido para ordem em {ACTIVES}.")
+                time.sleep(0.1)
+            
+            order = self.api.buy_multi_option.get(req_id)
+            if order and "id" in order:
                 print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
                 return {"status": "success", "id": order["id"]}
             else:
