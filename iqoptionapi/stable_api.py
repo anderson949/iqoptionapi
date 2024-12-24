@@ -98,60 +98,32 @@ class IQ_Option:
     
     def connect(self, sms_code=None):
         """
-        Estabelece uma conexão com a API da IQ Option.
-    
-        Este método gerencia a reconexão automática em caso de falha, 
-        além de suportar autenticação em dois fatores (2FA). Ele inicializa
-        assinaturas para streams e outros serviços após a conexão bem-sucedida.
-    
-        Args:
-            sms_code (str, optional): Código de autenticação em dois fatores (2FA), se necessário.
-    
-        Returns:
-            tuple: Um par (bool, str) indicando o sucesso da operação e uma mensagem de erro (se aplicável).
-                   - True e None: Conexão bem-sucedida.
-                   - False e mensagem: Falha com descrição do motivo.
+        Conecta-se à API com tratamento de reconexões.
         """
-        # Fechar conexão existente
-        try:
-            if hasattr(self, 'api') and self.api:
-                self.api.close()
-        except Exception as e:
-            print(f"Erro ao fechar conexão anterior: {e}")
-    
-        # Criar nova instância da API
-        self.api = IQOptionAPI("iqoption.com", self.email, self.password)
-    
-        # Configuração para autenticação 2FA, se necessário
-        if sms_code:
-            self.api.setTokenSMS(self.resp_sms)
-            status, reason = self.api.connect2fa(sms_code)
-            if not status:
-                print(f"Erro na autenticação 2FA: {reason}")
-                return status, reason
-    
-        # Configurar sessão e conectar
-        self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
-    
-        for attempt in range(3):  # Tentar reconectar até 3 vezes
+        max_attempts = 3  # Máximo de 3 tentativas
+        for attempt in range(max_attempts):
             try:
+                if hasattr(self, 'api') and self.api:
+                    self.api.close()
+                self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+                
+                if sms_code:
+                    self.api.setTokenSMS(self.resp_sms)
+                    status, reason = self.api.connect2fa(sms_code)
+                    if not status:
+                        print(f"[ERRO] Autenticação 2FA falhou: {reason}")
+                        return status, reason
+                
                 check, reason = self.api.connect()
                 if check:
+                    print("[SUCESSO] Conexão estabelecida.")
                     self._initialize_subscriptions()
                     return True, None
             except Exception as e:
-                print(f"Tentativa {attempt + 1} de conexão falhou: {e}")
-            time.sleep(2 ** attempt)  # Atraso exponencial antes da próxima tentativa
-    
-        # Tratamento de falha de verificação de 2FA
-        if json.loads(reason).get('code') == 'verify':
-            response = self.api.send_sms_code(json.loads(reason)['token'])
-            if response.json().get('code') != 'success':
-                return False, response.json().get('message')
-            self.resp_sms = response
-            return False, "2FA"
-    
-        return False, reason
+                print(f"[AVISO] Tentativa {attempt + 1} falhou: {e}")
+                time.sleep(2 ** attempt)  # Espera exponencial
+        
+        return False, "Falha após múltiplas tentativas de conexão"
     
     def _initialize_subscriptions(self):
         """
@@ -892,51 +864,30 @@ class IQ_Option:
 
     def check_win_v4(self, id_number):
         """
-        Verifica o resultado de uma operação com base no ID da ordem.
-    
-        Este método aguarda até que a operação seja encerrada e retorna
-        o status final (win, loss, equal) e o lucro/prejuízo.
-    
-        Parâmetros:
-            id_number (int): ID da ordem enviada.
-    
-        Retorna:
-            tuple: 
-                - (str): Status da operação ("win", "loss", "equal").
-                - (float): Lucro ou prejuízo da operação.
+        Verifica o resultado de uma operação.
         """
-        # Aguarda até que a operação esteja concluída
-        timeout = 60  # Limite para aguardar o resultado (60 segundos)
+        timeout = 60  # Tempo limite de 60 segundos
         start_time = time.time()
-    
+        
         while time.time() - start_time <= timeout:
             try:
-                # Verifica se o resultado está disponível
                 result = self.api.socket_option_closed.get(id_number)
                 if result and "msg" in result:
                     msg = result["msg"]
-                    win_status = msg.get("win", "undefined")  # Status da operação
-    
-                    # Calcula lucro/prejuízo com base no status
+                    win_status = msg.get("win", "undefined")
+                    profit = float(msg.get("win_amount", 0.0)) - float(msg.get("sum", 0.0))
                     if win_status == "equal":
-                        return win_status, 0.0  # Empate, sem lucro
-                    elif win_status == "loose":
-                        loss = -float(msg.get("sum", 0.0))  # Prejuízo como valor negativo
-                        return win_status, loss
+                        return win_status, 0.0
                     elif win_status == "win":
-                        profit = float(msg.get("win_amount", 0.0)) - float(msg.get("sum", 0.0))
                         return win_status, profit
-    
-            except KeyError:
-                pass  # Continua aguardando se a chave ainda não existe
+                    elif win_status == "loose":
+                        return win_status, -float(msg.get("sum", 0.0))
             except Exception as e:
                 print(f"[ERRO] Falha ao verificar resultado: {e}")
-    
-            time.sleep(0.1)  # Aguarda um curto intervalo para evitar sobrecarga de CPU
-    
-        # Caso o resultado não seja retornado no tempo limite
-        print(f"[FALHA] Tempo limite excedido ao verificar o resultado para a ordem {id_number}.")
-        return "timeout", 0.0((()))
+            time.sleep(0.1)
+        
+        print(f"[FALHA] Tempo limite excedido para ordem {id_number}.")
+        return "timeout", 0.0
     
     def check_result_forex(self, order_id):
         """
@@ -1108,55 +1059,31 @@ class IQ_Option:
     def buy(self, price, ACTIVES, ACTION, expirations):
         """
         Realiza a compra de uma opção e aguarda o resultado.
-    
-        Parâmetros:
-            price (float): Valor a ser investido.
-            ACTIVES (str): Nome do ativo (exemplo: "EURUSD").
-            ACTION (str): Direção da operação, "call" (compra) ou "put" (venda).
-            expirations (int): Tempo de expiração em segundos.
-    
-        Retorna:
-            dict: Resultado da operação contendo ID, status e lucro/prejuízo.
         """
-        self.api.buy_multi_option = {}
-        req_id = str(randint(0, 10000))
+        try:
+            price = float(price)  # Confirma que price é um float
+            self.api.buy_multi_option = {}
+            req_id = str(randint(0, 10000))
     
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            try:
-                # Envia a ordem
-                self.api.buyv3(float(price), OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
+            # Envia a ordem
+            self.api.buyv3(price, OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
+            
+            # Aguarda a resposta
+            start_time = time.time()
+            while req_id not in self.api.buy_multi_option:
+                if time.time() - start_time > 5:  # Timeout de 5 segundos
+                    raise TimeoutError(f"Compra de {ACTIVES} excedeu o tempo limite.")
+                time.sleep(0.1)
     
-                # Aguarda confirmação da ordem
-                start_time = time.time()
-                timeout = 5
-                while time.time() - start_time <= timeout:
-                    if req_id in self.api.buy_multi_option:
-                        order = self.api.buy_multi_option[req_id]
-                        if "id" in order:
-                            print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
-                            order_id = order["id"]
-    
-                            # Verifica o resultado usando check_win_v4
-                            status, payout = self.check_win_v4(order_id)
-                            return {
-                                "id": order_id,
-                                "status": status,
-                                "payout": payout
-                            }
-                        if "message" in order:
-                            raise ValueError(order["message"])
-                    time.sleep(0.1)
-    
-                raise TimeoutError(f"Compra de {ACTIVES} excedeu o tempo limite.")
-    
-            except Exception as e:
-                print(f"[AVISO] Tentativa {attempt + 1} falhou ao comprar {ACTIVES}: {e}. Reconectando...")
-                self.connect()
-                time.sleep(2 ** attempt)
-    
-        print(f"[FALHA] Não foi possível realizar a compra para {ACTIVES} após {max_attempts} tentativas.")
-        return {"status": "error", "message": "Falha após múltiplas tentativas"}
+            order = self.api.buy_multi_option[req_id]
+            if "id" in order:
+                print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
+                return {"status": "success", "id": order["id"]}
+            else:
+                raise ValueError(order.get("message", "Erro desconhecido."))
+        except Exception as e:
+            print(f"[ERRO] Falha ao realizar compra: {e}")
+            return {"status": "error", "message": str(e)}
         
     def buy_forex(self, active, amount, action, leverage, stop_loss=None, take_profit=None):
         """
@@ -1275,23 +1202,32 @@ class IQ_Option:
     
         print("[FALHA] Não foi possível obter a lista de ativos digitais após várias tentativas.")
         return None
-
+        
     def get_strike_list(self, ACTIVES, duration):
-        self.api.strike_list = None
-        self.api.get_strike_list(ACTIVES, duration)
-        ans = {}
-        while self.api.strike_list == None:
-            pass
+        """
+        Obtém a lista de strikes para um ativo específico.
+        """
         try:
-            for data in self.api.strike_list["msg"]["strike"]:
-                temp = {}
-                temp["call"] = data["call"]["id"]
-                temp["put"] = data["put"]["id"]
-                ans[("%.6f" % (float(data["value"]) * 10e-7))] = temp
-        except:
-            logging.error('**error** get_strike_list read problem...')
-            return self.api.strike_list, None
-        return self.api.strike_list, ans
+            self.api.strike_list = None
+            self.api.get_strike_list(ACTIVES, duration)
+            
+            start_time = time.time()
+            while self.api.strike_list is None:
+                if time.time() - start_time > 10:  # Timeout após 10 segundos
+                    raise TimeoutError(f"Tempo excedido ao buscar strikes para {ACTIVES}.")
+                time.sleep(0.1)
+            
+            strike_data = self.api.strike_list.get("msg", {}).get("strike", [])
+            strikes = {
+                "%.6f" % (float(data["value"]) * 10e-7): {
+                    "call": data["call"]["id"],
+                    "put": data["put"]["id"]
+                } for data in strike_data
+            }
+            return self.api.strike_list, strikes
+        except Exception as e:
+            print(f"[ERRO] Falha ao obter strikes: {e}")
+            return None, {}
 
     def subscribe_strike_list(self, ACTIVE, expiration_period):
         self.api.subscribe_instrument_quites_generated(
