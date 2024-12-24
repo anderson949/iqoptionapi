@@ -908,28 +908,94 @@ class IQ_Option:
         while True:
             try:
                 # Aguarda até que a operação seja encerrada
-                if self.api.socket_option_closed[id_number] is not None:
+                if id_number in self.api.socket_option_closed:
                     break
             except KeyError:
                 pass  # Continua aguardando se a chave ainda não existe
+            time.sleep(0.1)  # Aguarda um curto intervalo para reduzir uso de CPU
     
         # Obtém os resultados do dicionário retornado pela API
-        result = self.api.socket_option_closed[id_number]
-        if "msg" in result:
+        result = self.api.socket_option_closed.get(id_number)
+        if result and "msg" in result:
             msg = result["msg"]
             win_status = msg.get("win", "undefined")  # Pega o status (win, loose, equal)
+    
+            # Mapeia o status e calcula lucro/prejuízo
             if win_status == "equal":
-                return win_status, 0.0  # Lucro zero em caso de empate
+                return win_status, 0.0  # Empate, lucro zero
             elif win_status == "loose":
-                loss = -float(msg.get("sum", 0.0))  # Prejuízo é negativo
+                loss = -float(msg.get("sum", 0.0))  # Prejuízo como valor negativo
                 return win_status, loss
             elif win_status == "win":
                 profit = float(msg.get("win_amount", 0.0)) - float(msg.get("sum", 0.0))
                 return win_status, profit
     
-        # Caso algo inesperado aconteça, retorna um status indefinido
+        # Caso algo inesperado aconteça
         return "undefined", 0.0
-
+    
+    def check_result_forex(self, order_id):
+        """
+        Verifica o resultado de uma operação em Forex, Criptomoedas ou Ações.
+    
+        Parâmetros:
+            order_id (int): ID da ordem enviada.
+    
+        Retorna:
+            dict: Resultado contendo status, lucro/prejuízo e detalhes da operação.
+        """
+        timeout = 120  # Tempo limite para aguardar o fechamento da operação
+        start_time = time.time()
+    
+        while time.time() - start_time <= timeout:
+            try:
+                result = self.api.get_order_result(order_id)
+                if result and result.get("status") == "closed":
+                    profit = result.get("profit_amount", 0.0)
+                    print(f"[RESULTADO] Ordem {order_id} encerrada. Lucro/Prejuízo: {profit}")
+                    return {
+                        "status": "closed",
+                        "profit": profit,
+                        "details": result
+                    }
+            except Exception as e:
+                print(f"[ERRO] Falha ao verificar resultado da ordem {order_id}: {e}")
+                time.sleep(1)
+    
+        print(f"[FALHA] Tempo limite excedido ao aguardar resultado da ordem {order_id}.")
+        return {"status": "timeout", "profit": 0.0, "details": None}
+        
+    def close_forex(self, order_id):
+        """
+        Fecha uma posição aberta em Forex, Criptomoedas ou Ações.
+    
+        Parâmetros:
+            order_id (int): ID da ordem que será fechada.
+    
+        Retorna:
+            dict: Resultado do encerramento, contendo status e detalhes.
+        """
+        max_attempts = 3  # Número máximo de tentativas
+        for attempt in range(max_attempts):
+            try:
+                # Solicita o fechamento da ordem
+                result = self.api.close_order(order_id)
+                if result and result.get("status") == "closed":
+                    print(f"[SUCESSO] Posição {order_id} fechada com sucesso. Detalhes: {result}")
+                    return {"status": "success", "details": result}
+    
+                # Caso a API retorne um erro, tratamos aqui
+                if result and result.get("status") != "closed":
+                    print(f"[FALHA] Não foi possível fechar a posição {order_id}. Status retornado: {result.get('status')}")
+                    return {"status": "error", "message": "A posição não foi fechada.", "details": result}
+    
+            except Exception as e:
+                print(f"[AVISO] Tentativa {attempt + 1} falhou ao fechar posição {order_id}: {e}. Reconectando...")
+                self.connect()
+                time.sleep(2 ** attempt)  # Atraso exponencial entre tentativas
+    
+        print(f"[FALHA] Não foi possível fechar a posição {order_id} após {max_attempts} tentativas.")
+        return {"status": "error", "message": "Falha após múltiplas tentativas"}
+    
     def get_betinfo(self, id_number):
         # INPUT:int
         while True:
@@ -1086,6 +1152,43 @@ class IQ_Option:
     
         print(f"[FALHA] Não foi possível realizar a compra para {ACTIVES} após {max_attempts} tentativas.")
         return {"status": "error", "message": "Falha após múltiplas tentativas"}
+        
+    def buy_forex(self, active, amount, action, leverage, stop_loss=None, take_profit=None):
+        """
+        Realiza a compra de uma posição em Forex, Criptomoedas ou Ações.
+    
+        Parâmetros:
+            active (str): Nome do ativo, por exemplo, "EURUSD".
+            amount (float): Quantia a ser investida.
+            action (str): Direção da operação, "buy" ou "sell".
+            leverage (int): Alavancagem a ser utilizada.
+            stop_loss (float, opcional): Valor de stop-loss para encerrar a operação automaticamente.
+            take_profit (float, opcional): Valor de take-profit para encerrar a operação automaticamente.
+    
+        Retorna:
+            dict: Resultado da operação contendo ID e status.
+        """
+        action = action.lower()
+        if action not in ["buy", "sell"]:
+            print(f"[ERRO] Ação inválida '{action}'. Use 'buy' ou 'sell'.")
+            return {"status": "error", "message": "Ação inválida"}
+    
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                # Envia a ordem
+                order_id = self.api.buy_forex(active, amount, action, leverage, stop_loss, take_profit)
+                if order_id:
+                    print(f"[SUCESSO] Compra realizada para o ativo {active}. ID da ordem: {order_id}")
+                    return {"status": "success", "id": order_id}
+    
+            except Exception as e:
+                print(f"[AVISO] Tentativa {attempt + 1} falhou ao comprar {active}: {e}. Reconectando...")
+                self.connect()
+                time.sleep(2 ** attempt)
+    
+        print(f"[FALHA] Não foi possível realizar a compra para {active} após {max_attempts} tentativas.")
+        return {"status": "error", "message": "Falha após múltiplas tentativas"}        
 
     def sell_option(self, options_ids):
         """
