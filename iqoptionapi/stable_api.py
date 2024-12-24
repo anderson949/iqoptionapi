@@ -907,19 +907,28 @@ class IQ_Option:
         """
         while True:
             try:
+                # Aguarda até que a operação seja encerrada
                 if self.api.socket_option_closed[id_number] is not None:
                     break
-            except Exception:
-                pass
+            except KeyError:
+                pass  # Continua aguardando se a chave ainda não existe
     
+        # Obtém os resultados do dicionário retornado pela API
         result = self.api.socket_option_closed[id_number]
-        return (
-            result["msg"]["win"],
-            (0 if result["msg"]["win"] == "equal"
-             else float(result["msg"]["sum"]) * -1
-             if result["msg"]["win"] == "loose"
-             else float(result["msg"]["win_amount"]) - float(result["msg"]["sum"]))
-        )
+        if "msg" in result:
+            msg = result["msg"]
+            win_status = msg.get("win", "undefined")  # Pega o status (win, loose, equal)
+            if win_status == "equal":
+                return win_status, 0.0  # Lucro zero em caso de empate
+            elif win_status == "loose":
+                loss = -float(msg.get("sum", 0.0))  # Prejuízo é negativo
+                return win_status, loss
+            elif win_status == "win":
+                profit = float(msg.get("win_amount", 0.0)) - float(msg.get("sum", 0.0))
+                return win_status, profit
+    
+        # Caso algo inesperado aconteça, retorna um status indefinido
+        return "undefined", 0.0
 
     def get_betinfo(self, id_number):
         # INPUT:int
@@ -1041,7 +1050,7 @@ class IQ_Option:
         self.api.buy_multi_option = {}
         req_id = str(randint(0, 10000))
     
-        max_attempts = 3  # Número máximo de tentativas para enviar a ordem
+        max_attempts = 3
         for attempt in range(max_attempts):
             try:
                 # Envia a ordem
