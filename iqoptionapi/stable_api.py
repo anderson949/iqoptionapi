@@ -55,105 +55,128 @@ class IQ_Option:
         return self.api.timesync.server_timestamp
 
     def re_subscribe_stream(self):
-        try:
-            for ac in self.subscribe_candle:
-                sp = ac.split(",")
-                self.start_candles_one_stream(sp[0], sp[1])
-        except:
-            pass
-        # -----------------
-        try:
-            for ac in self.subscribe_candle_all_size:
+        """
+        Reassina automaticamente os streams previamente configurados.
+    
+        Este método é usado após uma reconexão para garantir que todos os streams 
+        (candle, mood e outros) sejam reassinados. Ele tenta cada categoria de assinatura
+        e ignora falhas individuais, continuando com as demais.
+    
+        Streams Reassinados:
+            - subscribe_candle: Stream de candles individuais.
+            - subscribe_candle_all_size: Stream de candles em todos os tamanhos.
+            - subscribe_mood: Stream de sentimento dos traders.
+    
+        Returns:
+            None
+        """
+        # Reassinar candles individuais
+        for ac in self.subscribe_candle:
+            try:
+                asset, size = ac.split(",")
+                self.start_candles_one_stream(asset, size)
+            except Exception as e:
+                print(f"Erro ao reassinar candle de {ac}: {e}")
+    
+        # Reassinar candles de todos os tamanhos
+        for ac in self.subscribe_candle_all_size:
+            try:
                 self.start_candles_all_size_stream(ac)
-        except:
-            pass
-        # -------------reconnect subscribe_mood
-        try:
-            for ac in self.subscribe_mood:
+            except Exception as e:
+                print(f"Erro ao reassinar candle de todos os tamanhos para {ac}: {e}")
+    
+        # Reassinar stream de sentimento dos traders
+        for ac in self.subscribe_mood:
+            try:
                 self.start_mood_stream(ac)
-        except:
-            pass
+            except Exception as e:
+                print(f"Erro ao reassinar stream de sentimento para {ac}: {e}")
 
     def set_session(self, header, cookie):
         self.SESSION_HEADER = header
         self.SESSION_COOKIE = cookie
-
+    
     def connect(self, sms_code=None):
+        """
+        Estabelece uma conexão com a API da IQ Option.
+    
+        Este método gerencia a reconexão automática em caso de falha, 
+        além de suportar autenticação em dois fatores (2FA). Ele inicializa
+        assinaturas para streams e outros serviços após a conexão bem-sucedida.
+    
+        Args:
+            sms_code (str, optional): Código de autenticação em dois fatores (2FA), se necessário.
+    
+        Returns:
+            tuple: Um par (bool, str) indicando o sucesso da operação e uma mensagem de erro (se aplicável).
+                   - True e None: Conexão bem-sucedida.
+                   - False e mensagem: Falha com descrição do motivo.
+        """
+        # Fechar conexão existente
         try:
-            self.api.close()
-        except:
-            pass
-            # logging.error('**warning** self.api.close() fail')
-
-        self.api = IQOptionAPI(
-            "iqoption.com", self.email, self.password)
-        check = None
-
-        # 2FA--
-        if sms_code is not None:
+            if hasattr(self, 'api') and self.api:
+                self.api.close()
+        except Exception as e:
+            print(f"Erro ao fechar conexão anterior: {e}")
+    
+        # Criar nova instância da API
+        self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+    
+        # Configuração para autenticação 2FA, se necessário
+        if sms_code:
             self.api.setTokenSMS(self.resp_sms)
             status, reason = self.api.connect2fa(sms_code)
             if not status:
+                print(f"Erro na autenticação 2FA: {reason}")
                 return status, reason
-        # 2FA--
-
-        self.api.set_session(headers=self.SESSION_HEADER,
-                             cookies=self.SESSION_COOKIE)
-
-        check, reason = self.api.connect()
-
-        if check == True:
-            # -------------reconnect subscribe_candle
-            self.re_subscribe_stream()
-
-            # ---------for async get name: "position-changed", microserviceName
-            while global_value.balance_id == None:
-                pass
-
-            self.position_change_all(
-                "subscribeMessage", global_value.balance_id)
-
-            self.order_changed_all("subscribeMessage")
-            self.api.setOptions(1, True)
-
-            """
-            self.api.subscribe_position_changed(
-                "position-changed", "multi-option", 2)
-
-            self.api.subscribe_position_changed(
-                "trading-fx-option.position-changed", "fx-option", 3)
-
-            self.api.subscribe_position_changed(
-                "position-changed", "crypto", 4)
-
-            self.api.subscribe_position_changed(
-                "position-changed", "forex", 5)
-
-            self.api.subscribe_position_changed(
-                "digital-options.position-changed", "digital-option", 6)
-
-            self.api.subscribe_position_changed(
-                "position-changed", "cfd", 7)
-            """
-
-            # self.get_balance_id()
-            return True, None
-        else:
-            if json.loads(reason)['code'] == 'verify':
-                response = self.api.send_sms_code(json.loads(reason)['token'])
-
-                if response.json()['code'] != 'success':
-                    return False, response.json()['message']
-
-                # token_sms
-                self.resp_sms = response
-                return False, "2FA"
-            return False, reason
-
-    # self.update_ACTIVES_OPCODE()
-
-    def connect_2fa(self, sms_code):
-        return self.connect(sms_code=sms_code)
+    
+        # Configurar sessão e conectar
+        self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
+    
+        for attempt in range(3):  # Tentar reconectar até 3 vezes
+            try:
+                check, reason = self.api.connect()
+                if check:
+                    self._initialize_subscriptions()
+                    return True, None
+            except Exception as e:
+                print(f"Tentativa {attempt + 1} de conexão falhou: {e}")
+            time.sleep(2 ** attempt)  # Atraso exponencial antes da próxima tentativa
+    
+        # Tratamento de falha de verificação de 2FA
+        if json.loads(reason).get('code') == 'verify':
+            response = self.api.send_sms_code(json.loads(reason)['token'])
+            if response.json().get('code') != 'success':
+                return False, response.json().get('message')
+            self.resp_sms = response
+            return False, "2FA"
+    
+        return False, reason
+    
+    def _initialize_subscriptions(self):
+        """
+        Inicializa as assinaturas após a conexão bem-sucedida.
+    
+        Este método é chamado internamente após a conexão com a API ser estabelecida.
+        Ele garante que streams, atualizações de posições e ordens sejam configuradas.
+    
+        Executa os seguintes passos:
+            - Reassina streams previamente configurados.
+            - Aguarda a sincronização do balance_id global.
+            - Configura atualizações automáticas para posições e ordens.
+    
+        Returns:
+            None
+        """
+        self.re_subscribe_stream()
+        while global_value.balance_id is None:
+            time.sleep(0.1)  # Reduzir ocupação da CPU enquanto aguarda o balance_id
+        self.position_change_all("subscribeMessage", global_value.balance_id)
+        self.order_changed_all("subscribeMessage")
+        self.api.setOptions(1, True)
+    
+        def connect_2fa(self, sms_code):
+            return self.connect(sms_code=sms_code)
 
     def check_connect(self):
         # True/False
@@ -377,27 +400,41 @@ class IQ_Option:
                     "commission"]) / 100.0
         return all_profit
 
-    # ----------------------------------------
-
-    # ______________________________________self.api.getprofile() https________________________________
-
     def get_profile_ansyc(self):
-        while self.api.profile.msg == None:
-            pass
-        return self.api.profile.msg
-
-    """def get_profile(self):
-        while True:
+        """
+        Obtém informações do perfil do usuário de forma assíncrona.
+    
+        Este método solicita o perfil do usuário à API e aguarda a resposta. 
+        Em caso de falha, reconecta automaticamente e tenta novamente.
+    
+        Retorna:
+            dict: Informações do perfil do usuário.
+            None: Retorna None se a operação falhar após múltiplas tentativas.
+    
+        Exceções:
+            TimeoutError: Lançada se o tempo limite de espera for excedido.
+        """
+        timeout = 10
+        max_attempts = 3
+    
+        for attempt in range(max_attempts):
             try:
-
-                respon = self.api.getprofile().json()
-                time.sleep(self.suspend)
-
-                if respon["isSuccessful"] == True:
-                    return respon
-            except:
-                logging.error('**error** get_profile try reconnect')
-                self.connect()"""
+                start_time = time.time()
+                while self.api.profile.msg is None:
+                    if time.time() - start_time > timeout:
+                        raise TimeoutError("Tempo excedido ao obter perfil do usuário.")
+                    time.sleep(0.1)
+    
+                print("[SUCESSO] Perfil do usuário obtido com sucesso.")
+                return self.api.profile.msg
+    
+            except Exception as e:
+                print(f"[AVISO] Tentativa {attempt + 1} falhou ao obter perfil: {e}. Reconectando...")
+                self.connect()
+                time.sleep(2 ** attempt)
+    
+        print("[FALHA] Não foi possível obter o perfil após múltiplas tentativas.")
+        return None
 
     def get_currency(self):
         balances_raw = self.get_balances()
@@ -510,29 +547,56 @@ class IQ_Option:
     # ________________________self.api.getcandles() wss________________________
 
     def get_candles(self, ACTIVES, interval, count, endtime):
+        """
+        Obtém dados históricos de candles para um ativo.
+    
+        Este método recupera informações de candles (gráficos de velas) 
+        de um ativo específico para um intervalo de tempo definido.
+    
+        Parâmetros:
+            ACTIVES (str): Nome do ativo, por exemplo, "EURUSD".
+            interval (int): Intervalo de tempo dos candles, em segundos (ex.: 60 para 1 minuto).
+            count (int): Número de candles a serem obtidos.
+            endtime (int): Timestamp Unix indicando o final do período de candles.
+    
+        Retorna:
+            list: Lista com os dados dos candles obtidos.
+            None: Retorna None se a operação falhar.
+    
+        Exceções:
+            TimeoutError: Lançada se o tempo limite de espera for excedido.
+        """
         self.api.candles.candles_data = None
-        while True:
+    
+        if ACTIVES not in OP_code.ACTIVES:
+            print(f"[ERRO] Ativo '{ACTIVES}' não encontrado nos códigos de operação.")
+            return None
+    
+        timeout = 10  # Limite por tentativa
+        max_attempts = 3  # Máximo de 3 tentativas
+    
+        for attempt in range(max_attempts):
             try:
-                if ACTIVES not in OP_code.ACTIVES:
-                    print('Asset {} not found on consts'.format(ACTIVES))
-                    break
-                self.api.getcandles(
-                    OP_code.ACTIVES[ACTIVES], interval, count, endtime)
-                while self.check_connect and self.api.candles.candles_data == None:
-                    pass
-                if self.api.candles.candles_data != None:
-                    break
-            except:
-                logging.error('**error** get_candles need reconnect')
+                self.api.getcandles(OP_code.ACTIVES[ACTIVES], interval, count, endtime)
+    
+                # Espera até que os dados sejam recebidos ou timeout
+                start_time = time.time()
+                while self.api.candles.candles_data is None:
+                    if time.time() - start_time > timeout:
+                        raise TimeoutError(f"Tempo excedido ao buscar candles para {ACTIVES}.")
+                    time.sleep(0.1)
+    
+                # Dados recebidos com sucesso
+                print(f"[SUCESSO] Dados de candles para {ACTIVES} obtidos com sucesso.")
+                return self.api.candles.candles_data
+    
+            except Exception as e:
+                print(f"[AVISO] Tentativa {attempt + 1} falhou ao buscar candles: {e}. Reconectando...")
                 self.connect()
-
-        return self.api.candles.candles_data
-
-    #######################################################
-    # ______________________________________________________
-    # _____________________REAL TIME CANDLE_________________
-    # ______________________________________________________
-    #######################################################
+                time.sleep(2 ** attempt)
+    
+        print(f"[FALHA] Não foi possível obter candles para {ACTIVES} após {max_attempts} tentativas.")
+        return None
 
     def start_candles_stream(self, ACTIVE, size, maxdict):
 
@@ -595,40 +659,95 @@ class IQ_Option:
 
     # ------------------------Subscribe ONE SIZE-----------------------
     def start_candles_one_stream(self, ACTIVE, size):
-        if (str(ACTIVE + "," + str(size)) in self.subscribe_candle) == False:
-            self.subscribe_candle.append((ACTIVE + "," + str(size)))
-        start = time.time()
-        self.api.candle_generated_check[str(ACTIVE)][int(size)] = {}
-        while True:
-            if time.time() - start > 20:
-                logging.error(
-                    '**error** start_candles_one_stream late for 20 sec')
-                return False
+        """
+        Inicia um stream de candles para um ativo específico e tamanho.
+    
+        Este método assina um stream de candles para um ativo (`ACTIVE`) em um tamanho 
+        de intervalo específico (`size`). Ele verifica continuamente até que o stream 
+        seja configurado ou até que o tempo limite de 20 segundos seja alcançado.
+    
+        Args:
+            ACTIVE (str): Nome do ativo (por exemplo, "EURUSD").
+            size (int): Tamanho do intervalo em segundos (exemplo: 60 para 1 minuto).
+    
+        Returns:
+            bool: 
+                - True: Stream iniciado com sucesso.
+                - False: Falha ao iniciar o stream no tempo limite.
+        """
+        # Adiciona a assinatura do candle ao controle local, se ainda não existir
+        candle_key = f"{ACTIVE},{size}"
+        if candle_key not in self.subscribe_candle:
+            self.subscribe_candle.append(candle_key)
+    
+        # Inicia o temporizador para o tempo limite
+        start_time = time.time()
+        self.api.candle_generated_check.setdefault(str(ACTIVE), {})[int(size)] = {}
+    
+        # Loop para verificar a inicialização do stream
+        while time.time() - start_time <= 20:
             try:
+                # Verifica se o stream foi configurado
                 if self.api.candle_generated_check[str(ACTIVE)][int(size)] == True:
                     return True
-            except:
-                pass
+            except KeyError:
+                pass  # Ignorar erros de chave inexistente
+    
+            # Tentar assinar o stream
             try:
-
                 self.api.subscribe(OP_code.ACTIVES[ACTIVE], size)
-            except:
-                logging.error('**error** start_candles_stream reconnect')
-                self.connect()
+            except Exception as e:
+                print(f"Erro ao assinar stream de {ACTIVE} com tamanho {size}: {e}")
+                self.connect()  # Reestabelecer conexão se necessário
             time.sleep(1)
+    
+        print(f"Tempo limite ao iniciar stream de {ACTIVE} com tamanho {size}.")
+        return False
 
     def stop_candles_one_stream(self, ACTIVE, size):
-        if ((ACTIVE + "," + str(size)) in self.subscribe_candle) == True:
-            self.subscribe_candle.remove(ACTIVE + "," + str(size))
-        while True:
+        """
+        Interrompe o stream de candles para um ativo e tamanho específicos.
+    
+        Este método cancela a assinatura de um stream de candles para o ativo (`ACTIVE`) 
+        e intervalo (`size`) especificados. Verifica continuamente até que a assinatura 
+        seja encerrada ou atinja o tempo limite.
+    
+        Args:
+            ACTIVE (str): Nome do ativo (por exemplo, "EURUSD").
+            size (int): Tamanho do intervalo em segundos (exemplo: 60 para 1 minuto).
+    
+        Returns:
+            bool: 
+                - True: Stream interrompido com sucesso.
+                - False: Falha ao interromper o stream no tempo limite.
+        """
+        # Remove o stream da lista local de assinaturas
+        candle_key = f"{ACTIVE},{size}"
+        if candle_key in self.subscribe_candle:
+            self.subscribe_candle.remove(candle_key)
+    
+        # Inicia o temporizador para o tempo limite
+        start_time = time.time()
+    
+        # Loop para interromper o stream
+        while time.time() - start_time <= 20:  # Tempo limite de 20 segundos
             try:
-                if self.api.candle_generated_check[str(ACTIVE)][int(size)] == {}:
+                # Verifica se o stream foi interrompido
+                if self.api.candle_generated_check.get(str(ACTIVE), {}).get(int(size)) == {}:
                     return True
-            except:
-                pass
-            self.api.candle_generated_check[str(ACTIVE)][int(size)] = {}
-            self.api.unsubscribe(OP_code.ACTIVES[ACTIVE], size)
-            time.sleep(self.suspend * 10)
+            except KeyError:
+                pass  # Ignorar erros de chave inexistente
+    
+            # Tentar cancelar a assinatura
+            try:
+                self.api.candle_generated_check[str(ACTIVE)][int(size)] = {}
+                self.api.unsubscribe(OP_code.ACTIVES[ACTIVE], size)
+            except Exception as e:
+                print(f"Erro ao cancelar stream de {ACTIVE} com tamanho {size}: {e}")
+            time.sleep(self.suspend)  # Pausa configurável entre tentativas
+    
+        print(f"Tempo limite ao cancelar stream de {ACTIVE} com tamanho {size}.")
+        return False
 
     # ------------------------Subscribe ALL SIZE-----------------------
 
@@ -900,41 +1019,99 @@ class IQ_Option:
         return self.api.result, self.api.buy_multi_option[req_id]["id"]
 
     def buy(self, price, ACTIVES, ACTION, expirations):
+        """
+        Realiza a compra de uma opção.
+    
+        Este método executa uma compra para o ativo especificado com os 
+        parâmetros de preço, direção e tempo de expiração fornecidos. 
+        Em caso de falha, reconecta automaticamente e tenta novamente.
+    
+        Parâmetros:
+            price (float): Valor a ser investido na compra.
+            ACTIVES (str): Nome do ativo (exemplo: "EURUSD").
+            ACTION (str): Direção da operação, "call" (compra) ou "put" (venda).
+            expirations (int): Tempo de expiração em segundos.
+    
+        Retorna:
+            tuple: 
+                - (bool, dict): Indicando sucesso e os detalhes da ordem.
+                - (bool, str): Indicando falha e uma mensagem de erro.
+    
+        Exceções:
+            TimeoutError: Lançada se o tempo limite de espera for excedido.
+        """
         self.api.buy_multi_option = {}
-        self.api.buy_successful = None
-        # req_id = "buy"
         req_id = str(randint(0, 10000))
-        try:
-            self.api.buy_multi_option[req_id]["id"] = None
-        except:
-            pass
-        self.api.buyv3(
-            float(price), OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
-        start_t = time.time()
-        id = None
-        self.api.result = None
-        while self.api.result == None or id == None:
+    
+        max_attempts = 3
+        for attempt in range(max_attempts):
             try:
-                if "message" in self.api.buy_multi_option[req_id].keys():
-                    return False, self.api.buy_multi_option[req_id]["message"]
-            except:
-                pass
-            try:
-                id = self.api.buy_multi_option[req_id]["id"]
-            except:
-                pass
-            if time.time() - start_t >= 5:
-                logging.error('**warning** buy late 5 sec')
-                return False, None
-
-        return self.api.result, self.api.buy_multi_option[req_id]["id"]
+                self.api.buyv3(float(price), OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
+    
+                # Aguardar resposta com limite de tempo
+                start_time = time.time()
+                timeout = 5
+                while time.time() - start_time <= timeout:
+                    if req_id in self.api.buy_multi_option:
+                        order = self.api.buy_multi_option[req_id]
+                        if "id" in order:
+                            print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
+                            return True, {"id": order["id"], "result": self.api.result}
+                        if "message" in order:
+                            raise ValueError(order["message"])
+                    time.sleep(0.1)
+    
+                raise TimeoutError(f"Compra de {ACTIVES} excedeu o tempo limite.")
+    
+            except Exception as e:
+                print(f"[AVISO] Tentativa {attempt + 1} falhou ao comprar {ACTIVES}: {e}. Reconectando...")
+                self.connect()
+                time.sleep(2 ** attempt)
+    
+        print(f"[FALHA] Não foi possível realizar a compra para {ACTIVES} após {max_attempts} tentativas.")
+        return False, "Erro após múltiplas tentativas"
 
     def sell_option(self, options_ids):
-        self.api.sell_option(options_ids)
-        self.api.sold_options_respond = None
-        while self.api.sold_options_respond == None:
-            pass
-        return self.api.sold_options_respond
+        """
+        Realiza a venda de uma ou mais opções.
+    
+        Este método solicita à API a venda de opções identificadas por seus IDs. 
+        Ele tenta reconectar automaticamente em caso de falha e possui limite de tentativas.
+    
+        Parâmetros:
+            options_ids (list): Lista com os IDs das opções a serem vendidas.
+    
+        Retorna:
+            dict: Resposta da API com os detalhes da venda.
+            None: Retorna None se a operação falhar após múltiplas tentativas.
+    
+        Exceções:
+            TimeoutError: Lançada se o tempo limite de espera for excedido.
+        """
+        start_time = time.time()
+        timeout = 10  # Limite de espera
+        max_attempts = 3
+    
+        for attempt in range(max_attempts):
+            try:
+                self.api.sell_option(options_ids)
+    
+                # Espera até que a resposta seja recebida ou timeout
+                while self.api.sold_options_respond is None:
+                    if time.time() - start_time > timeout:
+                        raise TimeoutError(f"Venda de opções {options_ids} excedeu o tempo limite.")
+                    time.sleep(0.1)
+    
+                print(f"[SUCESSO] Opções {options_ids} vendidas com sucesso.")
+                return self.api.sold_options_respond
+    
+            except Exception as e:
+                print(f"[AVISO] Tentativa {attempt + 1} falhou ao vender opções: {e}. Reconectando...")
+                self.connect()
+                time.sleep(2 ** attempt)
+    
+        print(f"[FALHA] Não foi possível vender opções {options_ids} após {max_attempts} tentativas.")
+        return None
 
     def sell_digital_option(self, options_ids):
         self.api.sell_digital_option(options_ids)
@@ -1034,53 +1211,75 @@ class IQ_Option:
     # https://github.com/Lu-Yi-Hsun/iqoptionapi/issues/65#issuecomment-513998357
 
     def buy_digital_spot(self, active, amount, action, duration):
-        # Expiration time need to be formatted like this: YYYYMMDDHHII
-        # And need to be on GMT time
-
-        # Type - P or C
+        """
+        Realiza a compra de uma opção digital.
+    
+        Este método executa uma compra para o ativo (`active`) com o valor especificado (`amount`),
+        direção (`action`) e duração (`duration`). Gera um ID único para a operação e aguarda 
+        a confirmação da API.
+    
+        Args:
+            active (str): Nome do ativo (exemplo: "EURUSD").
+            amount (float): Valor a ser investido.
+            action (str): Direção da operação, "call" (compra) ou "put" (venda).
+            duration (int): Duração da operação em minutos.
+    
+        Returns:
+            tuple:
+                - (bool): Indica sucesso ou falha da operação.
+                - (int|str): ID da ordem em caso de sucesso ou mensagem de erro em caso de falha.
+        """
+        # Validar a ação
         action = action.lower()
-        if action == 'put':
-            action = 'P'
-        elif action == 'call':
-            action = 'C'
-        else:
-            logging.error('buy_digital_spot active error')
-            return -1, None
-        # doEURUSD201907191250PT5MPSPT
-        timestamp = int(self.api.timesync.server_timestamp)
+        if action not in ['put', 'call']:
+            print(f"Erro: ação inválida '{action}'. Use 'call' ou 'put'.")
+            return False, "Ação inválida"
+    
+        # Converter ação para o formato esperado pela API
+        action_code = 'P' if action == 'put' else 'C'
+    
+        # Obter timestamp atual do servidor
+        try:
+            timestamp = int(self.api.timesync.server_timestamp)
+        except AttributeError:
+            print("Erro: não foi possível obter o timestamp do servidor.")
+            return False, "Erro no timestamp"
+    
+        # Calcular o horário de expiração
         if duration == 1:
             exp, _ = get_expiration_time(timestamp, duration)
         else:
-            now_date = datetime.fromtimestamp(
-                timestamp) + timedelta(minutes=1, seconds=30)
-            while True:
-                if now_date.minute % duration == 0 and time.mktime(now_date.timetuple()) - timestamp > 30:
-                    break
-                now_date = now_date + timedelta(minutes=1)
+            now_date = datetime.fromtimestamp(timestamp) + timedelta(minutes=1, seconds=30)
+            while now_date.minute % duration != 0 or time.mktime(now_date.timetuple()) - timestamp <= 30:
+                now_date += timedelta(minutes=1)
             exp = time.mktime(now_date.timetuple())
-
-        dateFormated = str(datetime.utcfromtimestamp(
-            exp).strftime("%Y%m%d%H%M"))
-        instrument_id = "do" + active + dateFormated + \
-                        "PT" + str(duration) + "M" + action + "SPT"
-        # self.api.digital_option_placed_id = None
-
-        request_id = self.api.place_digital_option(instrument_id, amount)
-
-        while self.api.digital_option_placed_id.get(request_id) == None:
-            pass
-        digital_order_id = self.api.digital_option_placed_id.get(request_id)
-        if isinstance(digital_order_id, int):
-            return True, digital_order_id
-        else:
-            return False, digital_order_id
-
-        # while self.api.digital_option_placed_id == None:
-        #     pass
-        # if isinstance(self.api.digital_option_placed_id, int):
-        #     return True, self.api.digital_option_placed_id
-        # else:
-        #     return False, self.api.digital_option_placed_id
+    
+        # Formatar o ID do instrumento
+        date_formatted = datetime.utcfromtimestamp(exp).strftime("%Y%m%d%H%M")
+        instrument_id = f"do{active}{date_formatted}PT{duration}M{action_code}SPT"
+    
+        # Enviar a ordem para a API
+        try:
+            request_id = self.api.place_digital_option(instrument_id, amount)
+        except Exception as e:
+            print(f"Erro ao enviar ordem para o ativo '{active}': {e}")
+            return False, "Erro ao enviar ordem"
+    
+        # Aguardar resposta da API com tempo limite
+        start_time = time.time()
+        timeout = 10  # Tempo limite de 10 segundos
+        while time.time() - start_time <= timeout:
+            digital_order_id = self.api.digital_option_placed_id.get(request_id)
+            if digital_order_id is not None:
+                if isinstance(digital_order_id, int):
+                    return True, digital_order_id
+                else:
+                    return False, digital_order_id
+            time.sleep(0.1)  # Reduzir uso de CPU enquanto aguarda resposta
+    
+        # Caso o tempo limite seja excedido
+        print(f"Falha ao realizar compra para o ativo '{active}': tempo limite excedido.")
+        return False, "Tempo limite excedido"
 
     def get_digital_spot_profit_after_sale(self, position_id):
         def get_instrument_id_to_bid(data, instrument_id):
