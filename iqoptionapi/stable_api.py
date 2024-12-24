@@ -905,33 +905,38 @@ class IQ_Option:
                 - (str): Status da operação ("win", "loss", "equal").
                 - (float): Lucro ou prejuízo da operação.
         """
-        while True:
+        # Aguarda até que a operação esteja concluída
+        timeout = 60  # Limite para aguardar o resultado (60 segundos)
+        start_time = time.time()
+    
+        while time.time() - start_time <= timeout:
             try:
-                # Aguarda até que a operação seja encerrada
-                if id_number in self.api.socket_option_closed:
-                    break
+                # Verifica se o resultado está disponível
+                result = self.api.socket_option_closed.get(id_number)
+                if result and "msg" in result:
+                    msg = result["msg"]
+                    win_status = msg.get("win", "undefined")  # Status da operação
+    
+                    # Calcula lucro/prejuízo com base no status
+                    if win_status == "equal":
+                        return win_status, 0.0  # Empate, sem lucro
+                    elif win_status == "loose":
+                        loss = -float(msg.get("sum", 0.0))  # Prejuízo como valor negativo
+                        return win_status, loss
+                    elif win_status == "win":
+                        profit = float(msg.get("win_amount", 0.0)) - float(msg.get("sum", 0.0))
+                        return win_status, profit
+    
             except KeyError:
                 pass  # Continua aguardando se a chave ainda não existe
-            time.sleep(0.1)  # Aguarda um curto intervalo para reduzir uso de CPU
+            except Exception as e:
+                print(f"[ERRO] Falha ao verificar resultado: {e}")
     
-        # Obtém os resultados do dicionário retornado pela API
-        result = self.api.socket_option_closed.get(id_number)
-        if result and "msg" in result:
-            msg = result["msg"]
-            win_status = msg.get("win", "undefined")  # Pega o status (win, loose, equal)
+            time.sleep(0.1)  # Aguarda um curto intervalo para evitar sobrecarga de CPU
     
-            # Mapeia o status e calcula lucro/prejuízo
-            if win_status == "equal":
-                return win_status, 0.0  # Empate, lucro zero
-            elif win_status == "loose":
-                loss = -float(msg.get("sum", 0.0))  # Prejuízo como valor negativo
-                return win_status, loss
-            elif win_status == "win":
-                profit = float(msg.get("win_amount", 0.0)) - float(msg.get("sum", 0.0))
-                return win_status, profit
-    
-        # Caso algo inesperado aconteça
-        return "undefined", 0.0
+        # Caso o resultado não seja retornado no tempo limite
+        print(f"[FALHA] Tempo limite excedido ao verificar o resultado para a ordem {id_number}.")
+        return "timeout", 0.0(((;)))
     
     def check_result_forex(self, order_id):
         """
