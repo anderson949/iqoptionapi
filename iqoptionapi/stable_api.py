@@ -936,7 +936,7 @@ class IQ_Option:
     
         # Caso o resultado não seja retornado no tempo limite
         print(f"[FALHA] Tempo limite excedido ao verificar o resultado para a ordem {id_number}.")
-        return "timeout", 0.0(((;)))
+        return "timeout", 0.0((()))
     
     def check_result_forex(self, order_id):
         """
