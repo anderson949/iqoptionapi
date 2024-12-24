@@ -175,28 +175,39 @@ class IQ_Option:
         self.order_changed_all("subscribeMessage")
         self.api.setOptions(1, True)
     
-        def connect_2fa(self, sms_code):
-            return self.connect(sms_code=sms_code)
+    def connect_2fa(self, sms_code):
+        return self.connect(sms_code=sms_code)
 
     def check_connect(self):
-        # True/False
-        # if not connected, sometimes it's None, sometimes its '0', so
-        # both will fall on this first case
+        """
+        Verifica se a conexão com a API está ativa.
+    
+        Este método verifica o estado atual da conexão com a API.
+    
+        Retorna:
+            bool: True se a conexão estiver ativa, False caso contrário.
+        """
         if not global_value.check_websocket_if_connect:
             return False
-        else:
-            return True
-        # wait for timestamp getting
+        return True
 
     # _________________________UPDATE ACTIVES OPCODE_____________________
     def get_all_ACTIVES_OPCODE(self):
         return OP_code.ACTIVES
 
     def update_ACTIVES_OPCODE(self):
-        # update from binary option
+        """
+        Atualiza a lista de códigos de operação disponíveis.
+    
+        Este método consulta a API para atualizar os códigos de operação (opções binárias, criptomoedas, etc.)
+        e reorganiza os ativos para uma estrutura ordenada.
+    
+        Retorna:
+            None
+        """
         self.get_ALL_Binary_ACTIVES_OPCODE()
-        # crypto /dorex/cfd
         self.instruments_input_all_in_ACTIVES()
+    
         dicc = {}
         for lis in sorted(OP_code.ACTIVES.items(), key=operator.itemgetter(1)):
             dicc[lis[0]] = lis[1]
@@ -259,33 +270,38 @@ class IQ_Option:
                 OP_code.ACTIVES[(init_info["result"][dirr]
                                  ["actives"][i]["name"]).split(".")[1]] = int(i)
 
-    # _________________________self.api.get_api_option_init_all() wss______________________
     def get_all_init(self):
-
+        """
+        Obtém informações iniciais da API.
+    
+        Este método coleta todas as informações iniciais necessárias da API 
+        para configurar os ativos disponíveis e outras funcionalidades.
+    
+        Retorna:
+            dict: Dados retornados pela API com as informações iniciais.
+        """
         while True:
             self.api.api_option_init_all_result = None
-            while True:
-                try:
-                    self.api.get_api_option_init_all()
-                    break
-                except:
-                    logging.error('**error** get_all_init need reconnect')
-                    self.connect()
-                    time.sleep(5)
-            start = time.time()
-            while True:
-                if time.time() - start > 30:
-                    logging.error('**warning** get_all_init late 30 sec')
-                    break
-                try:
-                    if self.api.api_option_init_all_result != None:
-                        break
-                except:
-                    pass
             try:
-                if self.api.api_option_init_all_result["isSuccessful"] == True:
+                self.api.get_api_option_init_all()
+            except Exception as e:
+                print(f"[ERRO] Falha ao obter informações iniciais: {e}. Tentando reconectar...")
+                self.connect()
+                time.sleep(5)
+                continue
+    
+            # Espera até obter os resultados ou atingir o timeout
+            start = time.time()
+            while self.api.api_option_init_all_result is None:
+                if time.time() - start > 30:
+                    print("[AVISO] Demora ao obter informações iniciais (30 segundos).")
+                    break
+                time.sleep(0.1)
+    
+            try:
+                if self.api.api_option_init_all_result["isSuccessful"]:
                     return self.api.api_option_init_all_result
-            except:
+            except KeyError:
                 pass
 
     def get_all_init_v2(self):
@@ -325,17 +341,26 @@ class IQ_Option:
                             self.OPEN_TIME[option][name]["open"] = active["enabled"]    
 
     def __get_digital_open(self):
-        # for digital options
-        digital_data = self.get_digital_underlying_list_data()["underlying"]
-        for digital in digital_data:
-            name = digital["underlying"]
-            schedule = digital["schedule"]
-            self.OPEN_TIME["digital"][name]["open"] = False
-            for schedule_time in schedule:
-                start = schedule_time["open"]
-                end = schedule_time["close"]
-                if start < time.time() < end:
-                    self.OPEN_TIME["digital"][name]["open"] = True
+        """
+        Verifica a abertura de ativos digitais com reconexão em caso de falha.
+        """
+        try:
+            digital_data = self.get_digital_underlying_list_data()["underlying"]
+            for digital in digital_data:
+                name = digital["underlying"]
+                schedule = digital["schedule"]
+                self.OPEN_TIME["digital"][name]["open"] = False
+                for schedule_time in schedule:
+                    start = schedule_time["open"]
+                    end = schedule_time["close"]
+                    if start < time.time() < end:
+                        self.OPEN_TIME["digital"][name]["open"] = True
+        except WebSocketConnectionClosedException as e:
+            print(f"[ERRO] Conexão WebSocket encerrada: {e}. Tentando reconectar...")
+            self.connect()
+            self.__get_digital_open()  # Reexecutar após reconexão
+        except Exception as e:
+            print(f"[ERRO] Falha inesperada ao verificar ativos digitais: {e}")
 
     def __get_other_open(self):
         # Crypto and etc pairs
@@ -353,18 +378,21 @@ class IQ_Option:
                         self.OPEN_TIME[instruments_type][name]["open"] = True
 
     def get_all_open_time(self):
-        # all pairs openned
+        """
+        Verifica a abertura de todos os mercados (binary, digital e outros), com tratamento de erros.
+        """
         self.OPEN_TIME = nested_dict(3, dict)
-        binary = threading.Thread(target=self.__get_binary_open)
-        digital = threading.Thread(target=self.__get_digital_open)
-        other = threading.Thread(target=self.__get_other_open)
-
-        binary.start(), digital.start(), other.start()
-
-        binary.join(), digital.join(), other.join()
+    
+        try:
+            # Execução sequencial para maior controle
+            self.__get_binary_open()
+            self.__get_digital_open()
+            self.__get_other_open()
+    
+        except Exception as e:
+            print(f"[ERRO] Falha ao verificar ativos abertos: {e}")
+    
         return self.OPEN_TIME
-
-    # --------for binary option detail
 
     def get_binary_option_detail(self):
         detail = nested_dict(2, dict)
@@ -445,25 +473,21 @@ class IQ_Option:
     def get_balance_id(self):
         return global_value.balance_id
 
-    """ def get_balance(self):
-        self.api.profile.balance = None
-        while True:
-            try:
-                respon = self.get_profile()
-                self.api.profile.balance = respon["result"]["balance"]
-                break
-            except:
-                logging.error('**error** get_balance()')
-
-            time.sleep(self.suspend)
-        return self.api.profile.balance"""
-
     def get_balance(self):
-
+        """
+        Obtém o saldo da conta atual.
+    
+        Este método coleta o saldo da conta (real ou prática) vinculada ao `balance_id` global.
+    
+        Retorna:
+            float: O saldo disponível.
+            None: Retorna None se não for possível obter o saldo.
+        """
         balances_raw = self.get_balances()
         for balance in balances_raw["msg"]:
             if balance["id"] == global_value.balance_id:
                 return balance["amount"]
+        return None
 
     def get_balances(self):
         self.api.balances_raw = None
@@ -1122,16 +1146,35 @@ class IQ_Option:
 # __________________for Digital___________________
 
     def get_digital_underlying_list_data(self):
-        self.api.underlying_list_data = None
-        self.api.get_digital_underlying()
-        start_t = time.time()
-        while self.api.underlying_list_data == None:
-            if time.time() - start_t >= 30:
-                logging.error(
-                    '**warning** get_digital_underlying_list_data late 30 sec')
-                return None
-
-        return self.api.underlying_list_data
+        """
+        Obtém a lista de ativos digitais disponíveis, com reconexão automática.
+    
+        Retorna:
+            dict: Dados dos ativos digitais disponíveis.
+        """
+        for attempt in range(3):  # Máximo de 3 tentativas
+            try:
+                self.api.underlying_list_data = None
+                self.api.get_digital_underlying()
+                start_t = time.time()
+    
+                while self.api.underlying_list_data is None:
+                    if time.time() - start_t >= 30:
+                        raise TimeoutError("Tempo excedido ao buscar lista de ativos digitais.")
+                    time.sleep(0.1)
+    
+                return self.api.underlying_list_data
+    
+            except WebSocketConnectionClosedException as e:
+                print(f"[ERRO] Conexão WebSocket encerrada: {e}. Tentando reconectar...")
+                self.connect()
+                time.sleep(2 ** attempt)  # Atraso exponencial entre tentativas
+            except Exception as e:
+                print(f"[ERRO] Falha ao obter ativos digitais: {e}")
+                time.sleep(2 ** attempt)
+    
+        print("[FALHA] Não foi possível obter a lista de ativos digitais após várias tentativas.")
+        return None
 
     def get_strike_list(self, ACTIVES, duration):
         self.api.strike_list = None
@@ -1214,71 +1257,54 @@ class IQ_Option:
         """
         Realiza a compra de uma opção digital.
     
-        Este método executa uma compra para o ativo (`active`) com o valor especificado (`amount`),
-        direção (`action`) e duração (`duration`). Gera um ID único para a operação e aguarda 
-        a confirmação da API.
+        Este método compra uma opção digital para um ativo específico com os 
+        parâmetros fornecidos, incluindo direção (call/put) e duração.
     
-        Args:
-            active (str): Nome do ativo (exemplo: "EURUSD").
-            amount (float): Valor a ser investido.
-            action (str): Direção da operação, "call" (compra) ou "put" (venda).
+        Parâmetros:
+            active (str): Nome do ativo, por exemplo, "EURUSD".
+            amount (float): Quantia a ser investida.
+            action (str): Direção da operação, "call" ou "put".
             duration (int): Duração da operação em minutos.
     
-        Returns:
+        Retorna:
             tuple:
-                - (bool): Indica sucesso ou falha da operação.
-                - (int|str): ID da ordem em caso de sucesso ou mensagem de erro em caso de falha.
+                - (bool): True em caso de sucesso, False em caso de falha.
+                - (int|str): ID da ordem em caso de sucesso, mensagem de erro em caso de falha.
         """
-        # Validar a ação
         action = action.lower()
         if action not in ['put', 'call']:
-            print(f"Erro: ação inválida '{action}'. Use 'call' ou 'put'.")
+            print(f"[ERRO] Ação inválida '{action}'. Use 'call' ou 'put'.")
             return False, "Ação inválida"
     
-        # Converter ação para o formato esperado pela API
-        action_code = 'P' if action == 'put' else 'C'
-    
-        # Obter timestamp atual do servidor
         try:
             timestamp = int(self.api.timesync.server_timestamp)
         except AttributeError:
-            print("Erro: não foi possível obter o timestamp do servidor.")
+            print("[ERRO] Não foi possível obter o timestamp do servidor.")
             return False, "Erro no timestamp"
     
-        # Calcular o horário de expiração
-        if duration == 1:
-            exp, _ = get_expiration_time(timestamp, duration)
-        else:
-            now_date = datetime.fromtimestamp(timestamp) + timedelta(minutes=1, seconds=30)
-            while now_date.minute % duration != 0 or time.mktime(now_date.timetuple()) - timestamp <= 30:
-                now_date += timedelta(minutes=1)
-            exp = time.mktime(now_date.timetuple())
+        # Calcular horário de expiração
+        exp, _ = get_expiration_time(timestamp, duration) if duration == 1 else self._calculate_expiration(timestamp, duration)
     
-        # Formatar o ID do instrumento
-        date_formatted = datetime.utcfromtimestamp(exp).strftime("%Y%m%d%H%M")
-        instrument_id = f"do{active}{date_formatted}PT{duration}M{action_code}SPT"
+        instrument_id = f"do{active}{exp}PT{duration}M{'P' if action == 'put' else 'C'}SPT"
     
-        # Enviar a ordem para a API
         try:
             request_id = self.api.place_digital_option(instrument_id, amount)
         except Exception as e:
-            print(f"Erro ao enviar ordem para o ativo '{active}': {e}")
+            print(f"[ERRO] Falha ao enviar ordem: {e}")
             return False, "Erro ao enviar ordem"
     
-        # Aguardar resposta da API com tempo limite
+        # Aguardar resposta
         start_time = time.time()
-        timeout = 10  # Tempo limite de 10 segundos
+        timeout = 10
         while time.time() - start_time <= timeout:
-            digital_order_id = self.api.digital_option_placed_id.get(request_id)
-            if digital_order_id is not None:
-                if isinstance(digital_order_id, int):
-                    return True, digital_order_id
-                else:
-                    return False, digital_order_id
-            time.sleep(0.1)  # Reduzir uso de CPU enquanto aguarda resposta
+            if request_id in self.api.digital_option_placed_id:
+                order_id = self.api.digital_option_placed_id[request_id]
+                if isinstance(order_id, int):
+                    return True, order_id
+                return False, order_id
+            time.sleep(0.1)
     
-        # Caso o tempo limite seja excedido
-        print(f"Falha ao realizar compra para o ativo '{active}': tempo limite excedido.")
+        print(f"[FALHA] Falha ao realizar compra para {active}: tempo limite excedido.")
         return False, "Tempo limite excedido"
 
     def get_digital_spot_profit_after_sale(self, position_id):
