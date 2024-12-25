@@ -366,25 +366,15 @@ class IQ_Option:
 
     def __get_digital_open(self):
         """
-        Verifica a abertura de ativos digitais com reconexão em caso de falha.
+        Verifica os ativos digitais disponíveis.
         """
         try:
-            digital_data = self.get_digital_underlying_list_data()["underlying"]
-            for digital in digital_data:
-                name = digital["underlying"]
-                schedule = digital["schedule"]
-                self.OPEN_TIME["digital"][name]["open"] = False
-                for schedule_time in schedule:
-                    start = schedule_time["open"]
-                    end = schedule_time["close"]
-                    if start < time.time() < end:
-                        self.OPEN_TIME["digital"][name]["open"] = True
-        except WebSocketConnectionClosedException as e:
-            print(f"[ERRO] Conexão WebSocket encerrada: {e}. Tentando reconectar...")
-            self.connect()
-            self.__get_digital_open()  # Reexecutar após reconexão
+            digital_assets = self.api.get_all_open_time()["digital"]  # Substituição
+            for asset, details in digital_assets.items():
+                if details["open"]:
+                    self.OPEN_TIME["digital"][asset] = details
         except Exception as e:
-            print(f"[ERRO] Falha inesperada ao verificar ativos digitais: {e}")
+            print(f"[ERRO] Falha ao verificar ativos digitais: {e}")
 
     def __get_other_open(self):
         # Crypto and etc pairs
