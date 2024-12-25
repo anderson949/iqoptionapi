@@ -369,7 +369,8 @@ class IQ_Option:
         Verifica os ativos digitais disponíveis.
         """
         try:
-            digital_assets = self.api.get_all_open_time()["digital"]  # Substituição
+            # Substitua aqui por um método correto, como `get_assets_open`
+            digital_assets = self.api.get_assets_open("digital")
             for asset, details in digital_assets.items():
                 if details["open"]:
                     self.OPEN_TIME["digital"][asset] = details
