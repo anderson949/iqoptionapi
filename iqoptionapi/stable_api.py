@@ -920,31 +920,38 @@ class IQ_Option:
     def check_win_v4(self, id_number):
         """
         Verifica o resultado de uma operação com base no ID da ordem.
+        Atualiza métricas diretamente no retorno.
         """
-        timeout = 60
+        timeout = 60  # Tempo máximo de espera
         start_time = time.time()
         
         while time.time() - start_time <= timeout:
-            self.ensure_connection()  # Verifica e reconecta se necessário
-            
             try:
+                # Garante que a conexão está ativa
+                if not global_value.check_websocket_if_connect:
+                    print("[AVISO] Reconectando...")
+                    self.connect()
+                
+                # Busca o resultado da ordem
                 result = self.api.socket_option_closed.get(id_number)
                 if result and "msg" in result:
                     msg = result["msg"]
                     win_status = msg.get("win", "undefined")
+                    
                     if win_status == "equal":
+                        print("[EMPATE] Lucro: $ 0.00")
                         return "equal", 0.0
                     elif win_status == "loose":
                         loss = -float(msg.get("sum", 0.0))
+                        print(f"[DERROTA] Perda: ${loss:.2f}")
                         return "loose", loss
                     elif win_status == "win":
                         profit = float(msg.get("win_amount", 0.0)) - float(msg.get("sum", 0.0))
+                        print(f"[VITÓRIA] Lucro: ${profit:.2f}")
                         return "win", profit
-            except KeyError:
-                pass
             except Exception as e:
                 print(f"[ERRO] Falha ao verificar resultado: {e}")
-            time.sleep(1)
+            time.sleep(1)  # Aguarda antes de tentar novamente
         
         print(f"[FALHA] Tempo limite excedido para a ordem {id_number}.")
         return "timeout", 0.0
@@ -1116,57 +1123,52 @@ class IQ_Option:
 
         return self.api.result, self.api.buy_multi_option[req_id]["id"]
 
-    def buy(self, price, ACTIVES, ACTION, expirations):
-        """
-        Realiza a compra de uma opção.
-        """
-        self.ensure_connection()  # Verifica e reconecta se necessário
-    
-        try:
-            req_id = str(randint(0, 10000))
-            self.api.buyv3(float(price), OP_code.ACTIVES[ACTIVES], ACTION, expirations, req_id)
-            
-            start_time = time.time()
-            while req_id not in self.api.buy_multi_option:
-                if time.time() - start_time > 10:
-                    raise TimeoutError(f"Tempo limite excedido para ordem em {ACTIVES}.")
-                time.sleep(0.1)
-            
-            order = self.api.buy_multi_option.get(req_id)
-            if order and "id" in order:
-                print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
-                return {"status": "success", "id": order["id"]}
-            else:
-                raise ValueError(order.get("message", "Erro desconhecido."))
-        except Exception as e:
-            print(f"[ERRO] Falha ao realizar compra: {e}")
-            return {"status": "error", "message": str(e)}
-            
-    def buy(self, price, ACTIVES, ACTION, expirations):
-        """
-        Realiza a compra de uma opção.
-        """
-        self.ensure_connection()  # Verifica e reconecta se necessário
-    
-        try:
-            req_id = str(randint(0, 10000))
-            self.api.buyv3(float(price), OP_code.ACTIVES[ACTIVES], ACTION, expirations, req_id)
-            
-            start_time = time.time()
-            while req_id not in self.api.buy_multi_option:
-                if time.time() - start_time > 10:
-                    raise TimeoutError(f"Tempo limite excedido para ordem em {ACTIVES}.")
-                time.sleep(0.1)
-            
-            order = self.api.buy_multi_option.get(req_id)
-            if order and "id" in order:
-                print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}.")
-                return {"status": "success", "id": order["id"]}
-            else:
-                raise ValueError(order.get("message", "Erro desconhecido."))
-        except Exception as e:
-            print(f"[ERRO] Falha ao realizar compra: {e}")
-            return {"status": "error", "message": str(e)}
+def buy(self, price, ACTIVES, ACTION, expirations):
+    """
+    Realiza a compra de uma opção e atualiza métricas após verificar o resultado.
+    """
+    try:
+        # Enviar ordem
+        req_id = str(randint(0, 10000))
+        self.api.buyv3(float(price), OP_code.ACTIVES[ACTIVES], ACTION, expirations, req_id)
+        
+        # Aguardar resposta da compra
+        start_time = time.time()
+        while req_id not in self.api.buy_multi_option:
+            if time.time() - start_time > 10:  # Timeout para resposta da compra
+                raise TimeoutError(f"[FALHA] Tempo limite excedido ao enviar ordem para {ACTIVES}.")
+            time.sleep(0.1)
+        
+        order = self.api.buy_multi_option.get(req_id)
+        if not order or "id" not in order:
+            raise ValueError(f"[FALHA] Ordem não foi processada corretamente: {order}")
+        
+        print(f"[SUCESSO] Compra realizada para o ativo {ACTIVES}. ID da ordem: {order['id']}")
+        
+        # Verificar o resultado da ordem
+        status, payout = self.check_win_v4(order["id"])
+        
+        # Atualizar métricas após o resultado
+        if status == "win":
+            self.wins += 1
+            self.balance += payout
+        elif status == "loose":
+            self.losses += 1
+            self.balance += payout
+        elif status == "equal":
+            self.draws += 1
+        
+        # Calcular assertividade
+        total_operations = self.wins + self.losses + self.draws
+        self.assertiveness = (self.wins / total_operations) * 100 if total_operations > 0 else 0
+        
+        # Exibir status atualizado
+        print(f"Saldo: ${self.balance:.2f} | Vitórias: {self.wins} | Derrotas: {self.losses} | Empates: {self.draws}")
+        print(f"Assertividade: {self.assertiveness:.2f}%")
+        return {"status": status, "payout": payout}
+    except Exception as e:
+        print(f"[ERRO] Falha ao realizar compra: {e}")
+        return {"status": "error", "message": str(e)}
         
     def buy_forex(self, active, amount, action, leverage, stop_loss=None, take_profit=None):
         """
