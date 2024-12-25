@@ -251,7 +251,7 @@ class IQ_Option:
                     time.sleep(5)
             start = time.time()
             while True:
-                if time.time() - start > 30:
+                if time.time() - start > 120:
                     logging.error('**warning** get_all_init late 30 sec')
                     break
                 try:
@@ -274,7 +274,7 @@ class IQ_Option:
         self.api.get_api_option_init_all_v2()
         start_t = time.time()
         while self.api.api_option_init_all_result_v2 == None:
-            if time.time() - start_t >= 30:
+            if time.time() - start_t >= 120:
                 logging.error('**warning** get_all_init_v2 late 30 sec')
                 return None
         return self.api.api_option_init_all_result_v2
@@ -949,7 +949,7 @@ class IQ_Option:
         self.api.get_digital_underlying()
         start_t = time.time()
         while self.api.underlying_list_data == None:
-            if time.time() - start_t >= 30:
+            if time.time() - start_t >= 120:
                 logging.error(
                     '**warning** get_digital_underlying_list_data late 30 sec')
                 return None
@@ -1180,7 +1180,7 @@ class IQ_Option:
         self.api.place_digital_option(instrument_id, amount)
         start_t = time.time()
         while self.api.digital_option_placed_id == None:
-            if time.time() - start_t > 30:
+            if time.time() - start_t > 120:
                 logging.error('buy_digital loss digital_option_placed_id')
                 return False, None
         return True, self.api.digital_option_placed_id
@@ -1585,7 +1585,7 @@ class IQ_Option:
                 timestamp) + timedelta(minutes=1, seconds=30)
 
             while True:
-                if now_date.minute % duration == 0 and time.mktime(now_date.timetuple()) - timestamp > 30:
+                if now_date.minute % duration == 0 and time.mktime(now_date.timetuple()) - timestamp > 120:
                     break
                 now_date = now_date + timedelta(minutes=1)
 
