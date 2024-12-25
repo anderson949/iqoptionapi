@@ -14,7 +14,7 @@ from iqoptionapi.expiration import get_expiration_time, get_remaning_time
 from iqoptionapi.version_control import api_version
 from datetime import datetime, timedelta
 from random import randint
-
+from websocket import WebSocketConnectionClosedException
 
 def nested_dict(n, type):
     if n == 1:
@@ -165,20 +165,17 @@ class IQ_Option:
     def ensure_connection(self):
         """
         Garante que a conexão com a API está ativa.
-        Tenta reconectar automaticamente caso esteja desconectada.
-        Retorna (status, reason).
+        Reconecta automaticamente caso seja necessário.
         """
         try:
-            if not hasattr(self, 'api') or not global_value.check_websocket_if_connect:
+            if not global_value.check_websocket_if_connect:
                 print("[AVISO] Conexão perdida. Tentando reconectar...")
-                status, reason = self.connect()
-                if not status:
-                    return False, f"Reconexão falhou: {reason}"
-                return True, "Reconexão bem-sucedida."
-            return True, "Conexão ativa."
+                self.connect()
+        except WebSocketConnectionClosedException:
+            print("[ERRO] Conexão WebSocket fechada. Reconectando...")
+            self.connect()
         except Exception as e:
             print(f"[ERRO] Falha ao garantir a conexão: {e}")
-            return False, str(e)
                                           
     def _initialize_subscriptions(self):
         """
@@ -407,15 +404,18 @@ class IQ_Option:
     def get_all_open_time(self):
         """
         Verifica a abertura de todos os mercados (binary, digital e outros).
+        Lida com reconexões em caso de falhas no WebSocket.
         """
-        self.ensure_connection()  # Verifica e reconecta se necessário
         self.OPEN_TIME = nested_dict(3, dict)
         
         try:
-            # Execução sequencial para maior controle
-            self.__get_binary_open()
-            self.__get_digital_open()
-            self.__get_other_open()
+            self.__get_binary_open()  # Verifica ativos binários
+            self.__get_digital_open()  # Verifica ativos digitais
+            self.__get_other_open()  # Verifica outros mercados
+        except WebSocketConnectionClosedException as e:
+            print(f"[AVISO] Conexão WebSocket fechada: {e}. Tentando reconectar...")
+            self.connect()  # Reconectar
+            self.get_all_open_time()  # Reexecutar após reconexão
         except Exception as e:
             print(f"[ERRO] Falha ao verificar ativos abertos: {e}")
         
