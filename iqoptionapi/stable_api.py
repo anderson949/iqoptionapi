@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from random import randint
 from websocket import WebSocketConnectionClosedException
 from typing import Tuple, Union  # Importação necessária
+from typing import Optional
 
 def nested_dict(n, type):
     if n == 1:
