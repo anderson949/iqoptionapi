@@ -15,6 +15,7 @@ from iqoptionapi.version_control import api_version
 from datetime import datetime, timedelta
 from random import randint
 from websocket import WebSocketConnectionClosedException
+from typing import Tuple, Union  # Importação necessária
 
 def nested_dict(n, type):
     if n == 1:
@@ -1822,34 +1823,30 @@ class IQ_Option:
         except (KeyError, StopIteration):
             # Retorna False se ACTIVE, duration ou a chave não forem encontrados
             return False                      
-            
+
     def buy_digital_spot(self, active: str, amount: float, action: str, duration: int) -> Tuple[bool, Union[int, str]]:
         """
-        Compra uma opção digital com base no ativo, quantidade, ação e duração especificados.
-    
+        Compra uma opção digital spot com base no ativo, montante, ação e duração.
+
         Parâmetros:
-        active (str): Ativo para a opção digital (e.g., 'EURUSD').
-        amount (float): Quantidade a investir.
+        active (str): Ativo (e.g., "EURUSD").
+        amount (float): Montante a ser investido.
         action (str): Ação da opção ('put' ou 'call').
         duration (int): Duração da opção em minutos.
-    
+
         Retorna:
-        tuple: (bool, int) - True e o ID da ordem se bem-sucedido, False e mensagem de erro caso contrário.
+        tuple: (bool, Union[int, str]) - True e o ID da ordem se bem-sucedido, False e mensagem de erro caso contrário.
         """
-        # Validate action
         action = action.lower()
         if action == 'put':
             action_type = 'P'
         elif action == 'call':
             action_type = 'C'
         else:
-            logging.error(f'Ação inválida: {action}')
+            logging.error('buy_digital_spot active error')
             return False, "Ação inválida"
-    
-        # Get server timestamp
+
         timestamp = int(self.api.timesync.server_timestamp)
-    
-        # Calculate expiration time
         if duration == 1:
             exp, _ = get_expiration_time(timestamp, duration)
         else:
@@ -1857,36 +1854,27 @@ class IQ_Option:
             while now_date.minute % duration != 0 or time.mktime(now_date.timetuple()) - timestamp <= 30:
                 now_date += timedelta(minutes=1)
             exp = time.mktime(now_date.timetuple())
-    
-        # Format expiration date
+
         date_formatted = datetime.utcfromtimestamp(exp).strftime("%Y%m%d%H%M")
         instrument_id = f"do{active}{date_formatted}PT{duration}M{action_type}SPT"
-    
-        # Place digital option
-        try:
-            request_id = self.api.place_digital_option(instrument_id, amount)
-        except Exception as e:
-            logging.error(f"Erro ao enviar opção digital: {e}")
-            return False, str(e)
-    
-        # Wait for order ID with timeout
+
+        request_id = self.api.place_digital_option(instrument_id, amount)
+
         start_time = time.time()
-        TIMEOUT = 10  # seconds
-        while time.time() - start_time < TIMEOUT:
-            digital_order_id = self.api.digital_option_placed_id.get(request_id)
-            if digital_order_id is not None:
-                break
-            time.sleep(0.1)
-        else:
-            logging.error("Tempo esgotado esperando pelo ID da ordem")
-            return False, "Tempo esgotado"
-    
+        timeout = 120  # Tempo limite em segundos
+
+        while self.api.digital_option_placed_id.get(request_id) is None:
+            if time.time() - start_time > timeout:
+                logging.error('buy_digital_spot tempo esgotado esperando ID da ordem')
+                return False, "Tempo esgotado"
+            time.sleep(0.1)  # Aguarda por intervalos curtos
+
+        digital_order_id = self.api.digital_option_placed_id.get(request_id)
         if isinstance(digital_order_id, int):
             return True, digital_order_id
         else:
-            logging.error(f"Ordem inválida: {digital_order_id}")
-            return False, digital_order_id         
-            
+            return False, digital_order_id
+                                                          
     def get_digital_spot_profit_after_sale(self, position_id):
         """
         Calcula o lucro após a venda de uma opção digital com base no ID da posição.
