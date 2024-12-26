@@ -53,18 +53,18 @@ class IQ_Option:
         self.OPEN_TIME = nested_dict(3, dict)
 
     def connect(self, sms_code=None):
-        """
-        Estabelece uma conexão com a API da IQ Option.
-        """
-        try:
-            # Check if self.api exists and is not None before calling close()
-            if hasattr(self, 'api') and self.api is not None:
-                self.api.close()  # Fecha a conexão anterior
-        except Exception as e:
-            logging.warning(f"Falha ao fechar a conexão anterior: {e}")
-    
-        # Inicializa a API com as credenciais do usuário
-        self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+            """
+            Estabelece uma conexão com a API da IQ Option.
+            """
+            try:
+                # Check if self.api exists and is not None before calling close()
+                if self.api is not None:
+                    self.api.close()  # Fecha a conexão anterior
+            except Exception as e:
+                logging.warning(f"Falha ao fechar a conexão anterior: {e}")
+        
+            # Inicializa a API com as credenciais do usuário
+            self.api = IQOptionAPI("iqoption.com", self.email, self.password)
     
         # Verifica se a autenticação de dois fatores (2FA) é necessária
         if sms_code is not None:
