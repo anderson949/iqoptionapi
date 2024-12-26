@@ -191,7 +191,7 @@ class IQ_Option:
         try:
             self.api.close()
         except Exception as e:
-            logging.warning(f"Falha ao fechar a conexão anterior: {e}")
+            pass
     
         # Inicializa a API com as credenciais do usuário
         self.api = IQOptionAPI("iqoption.com", self.email, self.password)
