@@ -25,48 +25,13 @@ def nested_dict(n, type):
         return defaultdict(lambda: nested_dict(n - 1, type))
 
 class IQ_Option:
-    def __init__(self, email, password, active_account_type="PRACTICE"):
-        self.email = email
-        self.password = password
-        self.active_account_type = active_account_type
-        self.api = None  # Inicializa o atributo 'api' como None
-
-    def connect(self, sms_code=None):
-        try:
-            if hasattr(self, 'api') and self.api is not None:  # Verifica se o atributo 'api' existe
-                self.api.close()  # Fecha a conexão anterior
-        except Exception as e:
-            logging.warning(f"Falha ao fechar a conexão anterior: {e}")
-
-        self.api = IQOptionAPI("iqoption.com", self.email, self.password)
-        check, reason = self.api.connect()
-
-        if check:
-            logging.info("Conexão estabelecida com sucesso!")
-            return True, None
-        else:
-            logging.error(f"Falha ao conectar: {reason}")
-            return False, reason
-
-
-class IQ_Option:
     __version__ = api_version
 
     def __init__(self, email, password, active_account_type="PRACTICE"):
         """
         Inicializa o cliente IQ_Option com as credenciais do usuário e configurações.
-    
-        Parâmetros:
-        email (str): Email do usuário para login.
-        password (str): Senha do usuário para login.
-        active_account_type (str, opcional): Tipo de conta a ser usada, padrão é "PRACTICE". 
-                                             (Atualmente não utilizado.)
-    
-        Nota:
-        A conexão com a API não é estabelecida automaticamente. 
-        O usuário deve chamar o método `connect()` manualmente para iniciar a sessão.
         """
-        # Initialize instance variables
+        self.api = None  # Initialize api attribute
         self.size = [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 
                      14400, 28800, 43200, 86400, 604800, 2592000]
         self.email = email
@@ -84,6 +49,25 @@ class IQ_Option:
             "User-Agent": r"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.139 Safari/537.36"
         }
         self.SESSION_COOKIE = {}
+ 
+        self.OPEN_TIME = nested_dict(3, dict)
+
+    def connect(self, sms_code=None):
+        try:
+            if hasattr(self, 'api') and self.api is not None:  # Verifica se o atributo 'api' existe
+                self.api.close()  # Fecha a conexão anterior
+        except Exception as e:
+            logging.warning(f"Falha ao fechar a conexão anterior: {e}")
+
+        self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+        check, reason = self.api.connect()
+
+        if check:
+            logging.info("Conexão estabelecida com sucesso!")
+            return True, None
+        else:
+            logging.error(f"Falha ao conectar: {reason}")
+            return False, reason
     
     def get_server_timestamp(self):
         """
