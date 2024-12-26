@@ -24,6 +24,30 @@ def nested_dict(n, type):
     else:
         return defaultdict(lambda: nested_dict(n - 1, type))
 
+class IQ_Option:
+    def __init__(self, email, password, active_account_type="PRACTICE"):
+        self.email = email
+        self.password = password
+        self.active_account_type = active_account_type
+        self.api = None  # Inicializa o atributo 'api' como None
+
+    def connect(self, sms_code=None):
+        try:
+            if hasattr(self, 'api') and self.api is not None:  # Verifica se o atributo 'api' existe
+                self.api.close()  # Fecha a conexão anterior
+        except Exception as e:
+            logging.warning(f"Falha ao fechar a conexão anterior: {e}")
+
+        self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+        check, reason = self.api.connect()
+
+        if check:
+            logging.info("Conexão estabelecida com sucesso!")
+            return True, None
+        else:
+            logging.error(f"Falha ao conectar: {reason}")
+            return False, reason
+
 
 class IQ_Option:
     __version__ = api_version
@@ -1568,58 +1592,51 @@ class IQ_Option:
                 return False, None
     
         return self.api.result, self.api.buy_multi_option[req_id]["id"]
-        
+
     def buy(self, price, ACTIVES, ACTION, expirations):
         """
         Realiza uma compra de opção binária.
-    
-        Este método permite comprar uma opção binária com base no preço, ativo, ação e expiração
-        especificados.
-    
+
         Parâmetros:
-        price (float): Preço da opção.
-        ACTIVES (str): Nome do ativo (ex: "EURUSD").
-        ACTION (str): Ação da opção ("call" ou "put").
-        expirations (int): Tempo de expiração em segundos.
-    
-        Retorno:
-        tuple: Uma tupla contendo:
-            - bool: True se a compra for bem-sucedida, False caso contrário.
-            - int: ID da ordem criada, ou None em caso de falha.
+        price (float): Valor da compra.
+        ACTIVES (str): Ativo (e.g., "EURUSD").
+        ACTION (str): Ação da opção ('put' ou 'call').
+        expirations (int): Tempo de expiração em minutos.
+
+        Retorna:
+        tuple: (bool, int) - True e o ID da ordem se bem-sucedido, False e None caso contrário.
         """
-        self.api.buy_multi_option = {}
-        self.api.buy_successful = None
-        req_id = str(randint(0, 10000))
-    
+        if not hasattr(self, 'api') or self.api is None:
+            logging.error("Conexão não estabelecida. Não é possível realizar a compra.")
+            return False, None
+
         try:
-            self.api.buy_multi_option[req_id]["id"] = None
-        except KeyError:
-            pass
-    
-        self.api.buyv3(float(price), OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
-    
-        start_t = time.time()
-        id = None
-        self.api.result = None
-    
-        while self.api.result is None or id is None:
-            try:
-                if "message" in self.api.buy_multi_option[req_id]:
-                    return False, self.api.buy_multi_option[req_id]["message"]
-            except KeyError:
-                pass
-    
-            try:
-                id = self.api.buy_multi_option[req_id]["id"]
-            except KeyError:
-                pass
-    
-            if time.time() - start_t >= 5:
-                logging.error("Timeout na compra.")
+            self.api.buy_multi_option = {}
+            req_id = str(int(time.time()))  # ID único para a requisição
+
+            self.api.buyv3(float(price), OP_code.ACTIVES[ACTIVES], str(ACTION), int(expirations), req_id)
+
+            start_time = time.time()
+            timeout = 10  # Tempo limite de 10 segundos
+
+            while self.api.buy_multi_option.get(req_id) is None:
+                if time.time() - start_time > timeout:
+                    logging.error("Timeout na compra.")
+                    return False, None
+                time.sleep(0.1)  # Aguarda por intervalos curtos
+
+            order_id = self.api.buy_multi_option[req_id]["id"]
+            if isinstance(order_id, int):
+                logging.info(f"Compra realizada com sucesso! ID da ordem: {order_id}")
+                return True, order_id
+            else:
+                logging.error("Falha ao obter ID da ordem.")
                 return False, None
-    
-        return self.api.result, self.api.buy_multi_option[req_id]["id"]      
-        
+
+        except Exception as e:
+            logging.error(f"Erro ao realizar a compra: {e}")
+            return False, None
+                                        
     def sell_option(self, options_ids):
         """
         Vende uma opção binária com base no ID da ordem.
@@ -2957,4 +2974,4 @@ class IQ_Option:
         if isinstance(digital_order_id, int):
             return True, digital_order_id
         else:
-            return False, digital_order_id                               
+            return False, digital_order_id
