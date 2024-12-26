@@ -53,20 +53,56 @@ class IQ_Option:
         self.OPEN_TIME = nested_dict(3, dict)
 
     def connect(self, sms_code=None):
+        """
+        Estabelece uma conexão com a API da IQ Option.
+        """
         try:
-            if hasattr(self, 'api') and self.api is not None:  # Verifica se o atributo 'api' existe
+            # Check if self.api exists and is not None before calling close()
+            if hasattr(self, 'api') and self.api is not None:
                 self.api.close()  # Fecha a conexão anterior
         except Exception as e:
             logging.warning(f"Falha ao fechar a conexão anterior: {e}")
-
+    
+        # Inicializa a API com as credenciais do usuário
         self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+    
+        # Verifica se a autenticação de dois fatores (2FA) é necessária
+        if sms_code is not None:
+            self.api.setTokenSMS(self.resp_sms)
+            status, reason = self.api.connect2fa(sms_code)
+            if not status:
+                return status, reason
+    
+        # Configura os cabeçalhos e cookies da sessão
+        self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
+    
+        # Tenta estabelecer a conexão
         check, reason = self.api.connect()
-
+    
         if check:
-            logging.info("Conexão estabelecida com sucesso!")
+            # Reconecta aos streams de dados previamente inscritos
+            self.re_subscribe_stream()
+    
+            # Aguarda até que o balance_id esteja disponível
+            while global_value.balance_id is None:
+                time.sleep(0.1)  # Evita o uso excessivo da CPU
+    
+            # Inscreve-se para receber atualizações de posições e ordens
+            self.position_change_all("subscribeMessage", global_value.balance_id)
+            self.order_changed_all("subscribeMessage")
+            self.api.setOptions(1, True)
+    
             return True, None
         else:
-            logging.error(f"Falha ao conectar: {reason}")
+            # Verifica se a falha foi devido à necessidade de autenticação de dois fatores (2FA)
+            if json.loads(reason)['code'] == 'verify':
+                response = self.api.send_sms_code(json.loads(reason)['token'])
+                if response.json()['code'] != 'success':
+                    return False, response.json()['message']
+    
+                # Armazena a resposta do SMS para uso futuro
+                self.resp_sms = response
+                return False, "2FA"
             return False, reason
     
     def get_server_timestamp(self):
