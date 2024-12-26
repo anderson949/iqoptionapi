@@ -1463,21 +1463,38 @@ class IQ_Option:
         
     def buy_multi(self, price, ACTIVES, ACTION, expirations):
         """
-        Realiza múltiplas compras de opções binárias em uma única chamada.
-    
-        Este método permite comprar várias opções binárias simultaneamente, com preços, ativos,
-        ações e expirações especificados. Ele aguarda até que todas as compras sejam confirmadas.
+        Executa múltiplas ordens de compra.
     
         Parâmetros:
-        price (list): Lista de preços das opções.
-        ACTIVES (list): Lista de ativos (ex: ["EURUSD", "GBPUSD"]).
-        ACTION (list): Lista de ações (ex: ["call", "put"]).
-        expirations (list): Lista de tempos de expiração em segundos.
+        price (list): Lista de preços.
+        ACTIVES (list): Lista de ativos.
+        ACTION (list): Lista de ações.
+        expirations (list): Lista de expirações.
     
-        Retorno:
-        list: Lista de IDs das ordens criadas, ou None em caso de erro.
+        Retorna:
+        list: Lista de IDs das ordens executadas.
         """
-        if len(price) != len(ACTIVES) != len(ACTION) != len(expirations
+        if len(price) != len(ACTIVES) != len(ACTION) != len(expirations):
+            logging.error('buy_multi error: please input all same len')
+            return None
+    
+        self.api.buy_multi_option = {}
+        buy_len = len(price)
+        for idx in range(buy_len):
+            self.api.buyv3(
+                price[idx], OP_code.ACTIVES[ACTIVES[idx]], ACTION[idx], expirations[idx], idx)
+        while len(self.api.buy_multi_option) < buy_len:
+            pass
+    
+        buy_id = []
+        for key in sorted(self.api.buy_multi_option.keys()):
+            try:
+                value = self.api.buy_multi_option[str(key)]
+                buy_id.append(value["id"])
+            except:
+                buy_id.append(None)
+    
+        return buy_id
         
     def get_remaning(self, duration):
         """
