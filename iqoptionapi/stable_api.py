@@ -549,19 +549,32 @@ class IQ_Option:
         Nota:
         Este método é privado e deve ser chamado apenas internamente.
         """
-        digital_data = self.get_digital_underlying_list_data()["underlying"]
+        # Verifica se o WebSocket está ativo
+        if not self.api.websocket_alive():
+            logging.warning("WebSocket inativo. Tentando reconectar...")
+            self.api.connect()
     
-        for digital in digital_data:
-            name = digital["underlying"]
-            schedule = digital["schedule"]
-            self.OPEN_TIME["digital"][name]["open"] = False
+        try:
+            digital_data = self.get_digital_underlying_list_data()
+            if not digital_data or "underlying" not in digital_data:
+                logging.error("Falha ao obter dados de ativos subjacentes digitais.")
+                return
     
-            for schedule_time in schedule:
-                start = schedule_time["open"]
-                end = schedule_time["close"]
+            digital_data = digital_data["underlying"]
     
-                if start < time.time() < end:
-                    self.OPEN_TIME["digital"][name]["open"] = True  
+            for digital in digital_data:
+                name = digital["underlying"]
+                schedule = digital["schedule"]
+                self.OPEN_TIME["digital"][name]["open"] = False
+    
+                for schedule_time in schedule:
+                    start = schedule_time["open"]
+                    end = schedule_time["close"]
+    
+                    if start < time.time() < end:
+                        self.OPEN_TIME["digital"][name]["open"] = True
+        except Exception as e:
+            logging.error(f"Erro ao atualizar o status de abertura das opções digitais: {e}")  
                     
     def __get_other_open(self):
         """
@@ -1708,17 +1721,28 @@ class IQ_Option:
         dict: Dicionário contendo a lista de ativos subjacentes, ou None em caso de timeout.
         """
         self.api.underlying_list_data = None
-        self.api.get_digital_underlying()
+        try:
+            self.api.get_digital_underlying()
+        except WebSocketConnectionClosedException:
+            logging.error("Conexão WebSocket encerrada. Tentando reconectar...")
+            self.api.connect()
+            self.api.get_digital_underlying()
     
         start_t = time.time()
         while self.api.underlying_list_data is None:
             if time.time() - start_t >= 120:
                 logging.warning("Timeout ao obter a lista de ativos subjacentes.")
                 return None
-            time.sleep(0.1)  # Evita o uso excessivo da CPU
-    
+            time.sleep(0.1)
         return self.api.underlying_list_data
         
+    def start_heartbeat(self):
+        def heartbeat():
+            while self.api.websocket_alive():
+                self.api.heartbeat()
+                time.sleep(30)
+        threading.Thread(target=heartbeat, daemon=True).start()
+                
     def get_strike_list(self, ACTIVES, duration):
         """
         Obtém a lista de strikes (preços de exercício) para um ativo e duração específicos.
