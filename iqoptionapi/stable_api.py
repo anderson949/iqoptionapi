@@ -263,7 +263,25 @@ class IQ_Option:
         bool: True se a conexão estiver ativa, False caso contrário.
         """
         return bool(global_value.check_websocket_if_connect)
-        
+
+    def send_websocket_request(self, name, msg, request_id="", no_force_send=True):
+        """
+        Envia uma solicitação WebSocket ao servidor IQ Option.
+    
+        Reconecta automaticamente se a conexão WebSocket estiver fechada.
+        """
+        data = json.dumps({"name": name, "msg": msg, "request_id": request_id})
+        try:
+            self.websocket.send(data)
+        except WebSocketConnectionClosedException:
+            logging.warning("Conexão WebSocket encerrada. Tentando reconectar...")
+            self.connect()
+            try:
+                self.websocket.send(data)
+            except Exception as e:
+                logging.error(f"Erro ao enviar a solicitação após reconexão: {e}")
+                raise        
+                        
     def get_all_ACTIVES_OPCODE(self):
         """
         Retorna um dicionário com todos os códigos de ativos (ACTIVES) disponíveis.
@@ -1737,11 +1755,31 @@ class IQ_Option:
         return self.api.underlying_list_data
         
     def start_heartbeat(self):
+        """
+        Inicia um "heartbeat" para manter a conexão WebSocket ativa.
+        """
         def heartbeat():
-            while self.api.websocket_alive():
-                self.api.heartbeat()
-                time.sleep(30)
+            while True:
+                try:
+                    if not self.websocket_alive():
+                        logging.warning("WebSocket inativo. Tentando reconectar...")
+                        self.connect()
+                    self.heartbeat()  # Envia um ping ao servidor
+                    time.sleep(30)
+                except Exception as e:
+                    logging.error(f"Erro no heartbeat: {e}")
+        
         threading.Thread(target=heartbeat, daemon=True).start()
+        
+    def monitor_websocket(self):
+        """
+        Monitora o status do WebSocket e tenta reconectar automaticamente.
+        """
+        while True:
+            if not self.websocket_alive():
+                logging.warning(f"WebSocket desconectado às {datetime.now()}. Tentando reconectar...")
+                self.connect()
+            time.sleep(10)  # Verifica a cada 10 segundos        
                 
     def get_strike_list(self, ACTIVES, duration):
         """
