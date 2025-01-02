@@ -252,7 +252,7 @@ class IQ_Option:
         """
         Verifica se o WebSocket está conectado.
         """
-        return bool(self.api and self.api.websocket and self.api.websocket.connected)    
+        return self.api.websocket.sock and self.api.websocket.sock.connected
 
     def send_websocket_request(self, name, msg, request_id="", no_force_send=True):
         """
