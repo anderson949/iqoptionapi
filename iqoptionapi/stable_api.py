@@ -250,33 +250,30 @@ class IQ_Option:
         
     def check_connect(self):
         """
-        Verifica se a conexão com o websocket da IQ Option está ativa.
-    
-        Este método verifica o status da conexão com o websocket, retornando True se estiver conectado
-        e False caso contrário. Ele lida com casos em que o status pode ser None ou '0'.
-    
-        Retorno:
-        bool: True se a conexão estiver ativa, False caso contrário.
+        Verifica se o WebSocket está conectado.
         """
-        return bool(global_value.check_websocket_if_connect)
+        return bool(self.api and self.api.websocket and self.api.websocket.connected)    
 
     def send_websocket_request(self, name, msg, request_id="", no_force_send=True):
         """
         Envia uma solicitação WebSocket ao servidor IQ Option.
-    
         Reconecta automaticamente se a conexão WebSocket estiver fechada.
         """
         data = json.dumps({"name": name, "msg": msg, "request_id": request_id})
         try:
-            self.websocket.send(data)
+            # Verifica se o WebSocket está ativo antes de enviar
+            if not self.check_connect():
+                logging.warning("WebSocket inativo. Tentando reconectar...")
+                self.connect()
+
+            # Envia o dado pelo WebSocket
+            self.api.websocket.send(data)
         except WebSocketConnectionClosedException:
-            logging.warning("Conexão WebSocket encerrada. Tentando reconectar...")
-            self.connect()
-            try:
-                self.websocket.send(data)
-            except Exception as e:
-                logging.error(f"Erro ao enviar a solicitação após reconexão: {e}")
-                raise        
+            logging.error("Conexão WebSocket já encerrada. Reconectando...")
+            self.reconnect_and_retry(data)
+        except Exception as e:
+            logging.error(f"Erro ao enviar a solicitação WebSocket: {e}")
+            raise
                         
     def get_all_ACTIVES_OPCODE(self):
         """
@@ -1767,15 +1764,28 @@ class IQ_Option:
         
         threading.Thread(target=heartbeat, daemon=True).start()
         
+    def reconnect_and_retry(self, data):
+        """
+        Tenta reconectar e reenviar os dados após uma desconexão.
+        """
+        try:
+            self.connect()
+            if self.check_connect():
+                self.api.websocket.send(data)
+            else:
+                logging.error("Reconexão falhou. WebSocket continua inativo.")
+        except Exception as e:
+            logging.error(f"Erro ao tentar reconectar e reenviar: {e}")
+
     def monitor_websocket(self):
         """
-        Monitora o status do WebSocket e tenta reconectar automaticamente.
+        Monitora e reconecta automaticamente se o WebSocket estiver desconectado.
         """
         while True:
-            if not self.websocket_alive():
-                logging.warning(f"WebSocket desconectado às {datetime.now()}. Tentando reconectar...")
+            if not self.check_connect():
+                logging.warning("WebSocket desconectado. Tentando reconectar...")
                 self.connect()
-            time.sleep(10)  # Verifica a cada 10 segundos        
+            time.sleep(10)  # Verifica o status do WebSocket a cada 10 segundos
                 
     def get_strike_list(self, ACTIVES, duration):
         """
