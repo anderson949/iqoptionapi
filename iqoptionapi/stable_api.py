@@ -58,32 +58,27 @@ class IQ_Option:
         Estabelece uma conexão com a API da IQ Option.
         """
         try:
-            if self.api is not None and self.api.websocket is not None:
-                self.api.close()  # Fecha a conexão anterior
+            # Fecha a conexão anterior, se existir
+            if self.api and hasattr(self.api, "close"):
+                self.api.close()
         except Exception as e:
             logging.warning(f"Falha ao fechar a conexão anterior: {e}")
-        
-        # Inicializa o WebSocket novamente
+    
+        # Inicializa a API
         self.api = IQOptionAPI("iqoption.com", self.email, self.password)
-        
-        # Reconecta com 2FA, se necessário
-        if sms_code is not None:
-            self.api.setTokenSMS(self.resp_sms)
-            status, reason = self.api.connect2fa(sms_code)
-            if not status:
-                return status, reason
     
-        # Configura os headers e cookies
-        self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
-        
-        # Tenta conectar
-        check, reason = self.api.connect()
-        if not check:
-            logging.error(f"Falha ao conectar: {reason}")
-            return False, reason
-    
-        logging.info("Conexão estabelecida com sucesso.")
-        return True, None
+        # Configurações adicionais e conexão
+        try:
+            self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
+            connected, reason = self.api.connect()
+            if not connected:
+                logging.error(f"Erro ao conectar: {reason}")
+                return False
+            logging.info("Conexão estabelecida com sucesso.")
+            return True
+        except Exception as e:
+            logging.error(f"Erro ao inicializar a API: {e}")
+            return False
     
     def get_server_timestamp(self):
         """
@@ -1772,12 +1767,19 @@ class IQ_Option:
         """
         while True:
             try:
+                # Verifica se `self.api` e `self.api.websocket` estão inicializados
+                if not self.api or not hasattr(self.api, "websocket") or not self.api.websocket:
+                    logging.warning("WebSocket não inicializado. Aguardando inicialização...")
+                    time.sleep(5)  # Aguarda antes de verificar novamente
+                    continue
+    
+                # Verifica o estado da conexão
                 if not self.check_connect():
                     logging.warning("WebSocket desconectado. Tentando reconectar...")
                     self.connect()
             except Exception as e:
                 logging.error(f"Erro ao monitorar o WebSocket: {e}")
-            time.sleep(10)  # Intervalo de 10 segundos entre verificações
+            time.sleep(10)  # Intervalo entre as verificações
                 
     def get_strike_list(self, ACTIVES, duration):
         """
