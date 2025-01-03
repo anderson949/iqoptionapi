@@ -51,36 +51,59 @@ class IQ_Option:
         self.SESSION_COOKIE = {}
  
         self.OPEN_TIME = nested_dict(3, dict)
-        self.thread_monitoring = None
 
-    def connect(self):
-        import time
-        max_attempts = 5
-        attempt = 0
-        backoff = 5  # Initial delay in seconds
-    
-        while attempt < max_attempts:
+    def connect(self, sms_code=None):
+            """
+            Estabelece uma conexão com a API da IQ Option.
+            """
             try:
-                if self.api and hasattr(self.api, "close"):
-                    self.api.close()
-                self.api = IQOptionAPI("iqoption.com", self.email, self.password)
-                self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
-                connected, reason = self.api.connect()
-                if connected:
-                    logging.info("Connection reestablished.")
-                    self.re_subscribe_stream()
-                    return True
-                else:
-                    logging.error(f"Connection failed: {reason}")
+                # Check if self.api exists and is not None before calling close()
+                if self.api is not None:
+                    self.api.close()  # Fecha a conexão anterior
             except Exception as e:
-                logging.error(f"Error reconnecting: {e}")
-            attempt += 1
-            if attempt < max_attempts:
-                sleep_time = backoff * (2 ** (attempt - 1))
-                logging.info(f"Retrying in {sleep_time} seconds...")
-                time.sleep(sleep_time)
-        logging.error("Max reconnection attempts reached. Unable to connect.")
-        return False
+                logging.warning(f"Falha ao fechar a conexão anterior: {e}")
+        
+            # Inicializa a API com as credenciais do usuário
+            self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+    
+            # Verifica se a autenticação de dois fatores (2FA) é necessária
+            if sms_code is not None:
+                self.api.setTokenSMS(self.resp_sms)
+                status, reason = self.api.connect2fa(sms_code)
+                if not status:
+                    return status, reason
+        
+            # Configura os cabeçalhos e cookies da sessão
+            self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
+        
+            # Tenta estabelecer a conexão
+            check, reason = self.api.connect()
+        
+            if check:
+                # Reconecta aos streams de dados previamente inscritos
+                self.re_subscribe_stream()
+        
+                # Aguarda até que o balance_id esteja disponível
+                while global_value.balance_id is None:
+                    time.sleep(0.1)  # Evita o uso excessivo da CPU
+        
+                # Inscreve-se para receber atualizações de posições e ordens
+                self.position_change_all("subscribeMessage", global_value.balance_id)
+                self.order_changed_all("subscribeMessage")
+                self.api.setOptions(1, True)
+        
+                return True, None
+            else:
+                # Verifica se a falha foi devido à necessidade de autenticação de dois fatores (2FA)
+                if json.loads(reason)['code'] == 'verify':
+                    response = self.api.send_sms_code(json.loads(reason)['token'])
+                    if response.json()['code'] != 'success':
+                        return False, response.json()['message']
+        
+                    # Armazena a resposta do SMS para uso futuro
+                    self.resp_sms = response
+                    return False, "2FA"
+                return False, reason
     
     def get_server_timestamp(self):
         """
@@ -146,40 +169,71 @@ class IQ_Option:
         """
         self.SESSION_HEADER = header
         self.SESSION_COOKIE = cookie      
-
-    def is_internet_available(self, hosts=["8.8.8.8", "1.1.1.1"], port=53, timeout=3):
-        import socket
-        for host in hosts:
-            try:
-                with socket.create_connection((host, port), timeout=timeout) as sock:
-                    return True
-            except (socket.timeout, OSError) as e:
-                logging.error(f"Connection to {host} failed: {e}")
-                continue  # Try next host
-        logging.warning("No internet connection available.")
-        return False
-                        
-    def connect(self):
+        
+    def connect(self, sms_code=None):
         """
-        Reconecta à API da IQ Option e reinicializa o WebSocket.
+        Estabelece uma conexão com a API da IQ Option.
+    
+        Este método realiza a conexão com a API, configurando a sessão e reconectando-se
+        aos streams de dados previamente inscritos. Também suporta autenticação de dois fatores (2FA).
+    
+        Parâmetros:
+        sms_code (str, opcional): Código de autenticação de dois fatores (2FA), se necessário.
+    
+        Retorno:
+        tuple: Uma tupla contendo:
+            - bool: True se a conexão for bem-sucedida, False caso contrário.
+            - str: Motivo da falha (se houver), ou None em caso de sucesso.
+    
+        Exceções:
+        logging.warning: Registra avisos em caso de falhas durante o processo de conexão.
         """
         try:
-            if self.api and hasattr(self.api, "close"):
-                self.api.close()  # Fecha conexão existente
-            self.api = IQOptionAPI("iqoption.com", self.email, self.password)  # Reinicializa
-            self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
-            connected, reason = self.api.connect()
-    
-            if connected:
-                logging.info("Conexão com a API restabelecida.")
-                self.re_subscribe_stream()  # Reinscreve streams
-                return True
-            else:
-                logging.error(f"Falha na conexão: {reason}")
-                return False
+            self.api.close()
         except Exception as e:
-            logging.error(f"Erro ao inicializar a API: {e}")
-            return False
+            pass
+    
+        # Inicializa a API com as credenciais do usuário
+        self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+    
+        # Verifica se a autenticação de dois fatores (2FA) é necessária
+        if sms_code is not None:
+            self.api.setTokenSMS(self.resp_sms)
+            status, reason = self.api.connect2fa(sms_code)
+            if not status:
+                return status, reason
+    
+        # Configura os cabeçalhos e cookies da sessão
+        self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
+    
+        # Tenta estabelecer a conexão
+        check, reason = self.api.connect()
+    
+        if check:
+            # Reconecta aos streams de dados previamente inscritos
+            self.re_subscribe_stream()
+    
+            # Aguarda até que o balance_id esteja disponível
+            while global_value.balance_id is None:
+                time.sleep(0.1)  # Evita o uso excessivo da CPU
+    
+            # Inscreve-se para receber atualizações de posições e ordens
+            self.position_change_all("subscribeMessage", global_value.balance_id)
+            self.order_changed_all("subscribeMessage")
+            self.api.setOptions(1, True)
+    
+            return True, None
+        else:
+            # Verifica se a falha foi devido à necessidade de autenticação de dois fatores (2FA)
+            if json.loads(reason)['code'] == 'verify':
+                response = self.api.send_sms_code(json.loads(reason)['token'])
+                if response.json()['code'] != 'success':
+                    return False, response.json()['message']
+    
+                # Armazena a resposta do SMS para uso futuro
+                self.resp_sms = response
+                return False, "2FA"
+            return False, reason        
             
     def connect_2fa(self, sms_code):
         """
@@ -200,32 +254,16 @@ class IQ_Option:
         
     def check_connect(self):
         """
-        Verifica se a conexão com o WebSocket está ativa e funcional.
-        Retorna True se a conexão estiver ativa, caso contrário False.
+        Verifica se a conexão com o websocket da IQ Option está ativa.
+    
+        Este método verifica o status da conexão com o websocket, retornando True se estiver conectado
+        e False caso contrário. Ele lida com casos em que o status pode ser None ou '0'.
+    
+        Retorno:
+        bool: True se a conexão estiver ativa, False caso contrário.
         """
-        try:
-            # Adiciona uma verificação real do estado do WebSocket
-            if self.api and self.api.websocket and self.api.websocket.sock:
-                return self.api.websocket.sock.connected
-        except Exception as e:
-            logging.error(f"Erro ao verificar conexão: {e}")
-        return False
-
-    def send_websocket_request(self, name, msg, request_id="", no_force_send=True):
-        data = json.dumps({"name": name, "msg": msg, "request_id": request_id})
-        try:
-            if not self.check_connect():
-                logging.warning("WebSocket connection closed. Attempting to reconnect...")
-                if not self.connect():
-                    logging.error("Reconnection failed. Unable to send request.")
-                    return
-            self.api.websocket.send(data)
-        except WebSocketConnectionClosedException:
-            logging.warning("WebSocket connection closed. Reconnecting...")
-            self.connect()
-        except Exception as e:
-            logging.error(f"Error sending data via WebSocket: {e}")
-                        
+        return bool(global_value.check_websocket_if_connect)
+        
     def get_all_ACTIVES_OPCODE(self):
         """
         Retorna um dicionário com todos os códigos de ativos (ACTIVES) disponíveis.
@@ -511,32 +549,19 @@ class IQ_Option:
         Nota:
         Este método é privado e deve ser chamado apenas internamente.
         """
-        # Verifica se o WebSocket está ativo
-        if not self.api.websocket_alive():
-            logging.warning("WebSocket inativo. Tentando reconectar...")
-            self.api.connect()
+        digital_data = self.get_digital_underlying_list_data()["underlying"]
     
-        try:
-            digital_data = self.get_digital_underlying_list_data()
-            if not digital_data or "underlying" not in digital_data:
-                logging.error("Falha ao obter dados de ativos subjacentes digitais.")
-                return
+        for digital in digital_data:
+            name = digital["underlying"]
+            schedule = digital["schedule"]
+            self.OPEN_TIME["digital"][name]["open"] = False
     
-            digital_data = digital_data["underlying"]
+            for schedule_time in schedule:
+                start = schedule_time["open"]
+                end = schedule_time["close"]
     
-            for digital in digital_data:
-                name = digital["underlying"]
-                schedule = digital["schedule"]
-                self.OPEN_TIME["digital"][name]["open"] = False
-    
-                for schedule_time in schedule:
-                    start = schedule_time["open"]
-                    end = schedule_time["close"]
-    
-                    if start < time.time() < end:
-                        self.OPEN_TIME["digital"][name]["open"] = True
-        except Exception as e:
-            logging.error(f"Erro ao atualizar o status de abertura das opções digitais: {e}")  
+                if start < time.time() < end:
+                    self.OPEN_TIME["digital"][name]["open"] = True  
                     
     def __get_other_open(self):
         """
@@ -856,31 +881,41 @@ class IQ_Option:
             
     def get_candles(self, ACTIVES, interval, count, endtime):
         """
-        Obtém candles históricos com timeout para evitar loops infinitos.
-        """
-        timeout = 30  # Define um timeout de 30 segundos
-        start_time = time.time()
+        Obtém os candles históricos para um ativo específico.
     
-        while time.time() - start_time < timeout:
+        Este método consulta a API para obter os candles históricos com base no ativo, intervalo,
+        quantidade e tempo de fim especificados. Se o ativo não for encontrado ou ocorrer um erro,
+        ele tenta reconectar à API.
+    
+        Parâmetros:
+        ACTIVES (str): Nome do ativo (ex: "EURUSD").
+        interval (int): Intervalo dos candles em segundos.
+        count (int): Número de candles a serem obtidos.
+        endtime (int): Timestamp de fim dos candles.
+    
+        Retorno:
+        list: Lista de candles históricos.
+        """
+        self.api.candles.candles_data = None
+    
+        while True:
             try:
-                if not self.check_connect():
-                    logging.warning("Conexão perdida. Tentando reconectar...")
-                    if not self.monitor_connection():
-                        return None  # Retorna None se a reconexão falhar
+                if ACTIVES not in OP_code.ACTIVES:
+                    logging.warning(f"Ativo '{ACTIVES}' não encontrado nos consts.")
+                    break
     
                 self.api.getcandles(OP_code.ACTIVES[ACTIVES], interval, count, endtime)
-                while self.api.candles.candles_data is None:
-                    if time.time() - start_time >= timeout:
-                        raise TimeoutError("Timeout ao obter candles")
-                    time.sleep(0.1)
     
-                return self.api.candles.candles_data
-            except TimeoutError as e:
-                logging.error(f"Erro por timeout: {e}")
-                return None
+                while self.check_connect() and self.api.candles.candles_data is None:
+                    time.sleep(0.1)  # Evita o uso excessivo da CPU
+    
+                if self.api.candles.candles_data is not None:
+                    break
             except Exception as e:
                 logging.error(f"Erro ao obter candles: {e}. Tentando reconectar...")
-                self.monitor_connection()
+                self.connect()
+    
+        return self.api.candles.candles_data        
         
     def start_candles_stream(self, ACTIVE, size, maxdict):
         """
@@ -1673,123 +1708,17 @@ class IQ_Option:
         dict: Dicionário contendo a lista de ativos subjacentes, ou None em caso de timeout.
         """
         self.api.underlying_list_data = None
-        try:
-            self.api.get_digital_underlying()
-        except WebSocketConnectionClosedException:
-            logging.error("Conexão WebSocket encerrada. Tentando reconectar...")
-            self.api.connect()
-            self.api.get_digital_underlying()
+        self.api.get_digital_underlying()
     
         start_t = time.time()
         while self.api.underlying_list_data is None:
             if time.time() - start_t >= 120:
                 logging.warning("Timeout ao obter a lista de ativos subjacentes.")
                 return None
-            time.sleep(0.1)
+            time.sleep(0.1)  # Evita o uso excessivo da CPU
+    
         return self.api.underlying_list_data
         
-    def start_heartbeat(self):
-        """
-        Envia sinais periódicos para manter a conexão ativa.
-        """
-        def heartbeat():
-            while True:
-                try:
-                    if not self.check_connect():
-                        logging.warning("Conexão inativa. Tentando reconectar...")
-                        self.connect()
-                    else:
-                        self.api.ping()  # Envia ping ao servidor
-                    time.sleep(30)
-                except Exception as e:
-                    logging.error(f"Erro no heartbeat: {e}")
-    
-        threading.Thread(target=heartbeat, daemon=True).start()
-        
-    def reconnect_and_retry(self, data):
-        """
-        Tenta reconectar e reenviar os dados após uma desconexão.
-        """
-        try:
-            # Reconecta o WebSocket
-            success, reason = self.connect()
-            if not success:
-                logging.error(f"Reconexão falhou: {reason}")
-                return
-    
-            # Reenvia os dados se a reconexão for bem-sucedida
-            if self.check_connect():
-                self.api.websocket.send(data)
-            else:
-                logging.error("WebSocket ainda inativo após a reconexão.")
-        except Exception as e:
-            logging.error(f"Erro ao tentar reconectar e reenviar: {e}")    
-    
-    def monitor_websocket(self):
-        retries = 0
-        max_retries = 10
-        backoff = 2  # Tempo inicial de espera (segundos)
-    
-        while retries < max_retries:
-            try:
-                # Verifica conectividade com a internet
-                if not self.is_internet_available():
-                    logging.warning("Sem conexão com a internet. Tentando novamente...")
-                    time.sleep(5)
-                    continue
-    
-                # Verifica estado do WebSocket
-                if not self.check_connect():
-                    logging.warning("WebSocket desconectado. Tentando reconectar...")
-                    if self.connect():
-                        retries = 0
-                    else:
-                        retries += 1
-                        time.sleep(min(backoff, 60))  # Máximo de 1 minuto
-                        backoff *= 2  # Aumenta o backoff exponencialmente
-                    continue
-            except Exception as e:
-                logging.error(f"Erro no monitoramento: {e}")
-                retries += 1
-                time.sleep(min(backoff, 60))
-                backoff *= 2
-    
-            time.sleep(10)
-    
-        logging.critical(f"Falha ao reconectar após {max_retries} tentativas.")
-
-    def start_monitoring(self):
-        """
-        Inicia o monitoramento em uma thread separada.
-        """
-        if not self.thread or not self.thread.is_alive():
-            self.thread = threading.Thread(target=self.monitor_connection, daemon=True)
-            self.thread.start()
-            logging.info("Monitoramento iniciado.")
-
-    def monitor_connection(self, max_retries=5):
-        """
-        Monitora a conexão e tenta reconectar automaticamente com backoff exponencial.
-        """
-        retries = 0
-        backoff = 2  # Tempo inicial de espera (segundos)
-    
-        while retries < max_retries:
-            if self.check_connect():
-                logging.info("Conexão estável.")
-                return True
-    
-            logging.warning("Conexão perdida. Tentando reconectar...")
-            if self.connect():
-                retries = 0  # Reseta contador em caso de sucesso
-            else:
-                retries += 1
-                logging.warning(f"Tentativa {retries}/{max_retries} falhou.")
-                time.sleep(min(backoff, 60))  # Aumenta o backoff até um máximo de 1 minuto
-                backoff *= 2
-    
-        logging.critical("Reconexão falhou após múltiplas tentativas.")
-        return False                                                                                                                             
     def get_strike_list(self, ACTIVES, duration):
         """
         Obtém a lista de strikes (preços de exercício) para um ativo e duração específicos.
