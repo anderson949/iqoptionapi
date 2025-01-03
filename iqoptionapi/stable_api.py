@@ -51,55 +51,39 @@ class IQ_Option:
         self.SESSION_COOKIE = {}
  
         self.OPEN_TIME = nested_dict(3, dict)
+        threading.Thread(target=self.monitor_websocket, daemon=True).start()
 
     def connect(self, sms_code=None):
         """
         Estabelece uma conexão com a API da IQ Option.
         """
         try:
-            if self.api is not None:
+            if self.api is not None and self.api.websocket is not None:
                 self.api.close()  # Fecha a conexão anterior
         except Exception as e:
             logging.warning(f"Falha ao fechar a conexão anterior: {e}")
-    
-        # Inicializa a API com as credenciais do usuário
+        
+        # Inicializa o WebSocket novamente
         self.api = IQOptionAPI("iqoption.com", self.email, self.password)
-    
+        
+        # Reconecta com 2FA, se necessário
         if sms_code is not None:
             self.api.setTokenSMS(self.resp_sms)
             status, reason = self.api.connect2fa(sms_code)
             if not status:
                 return status, reason
     
+        # Configura os headers e cookies
         self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
-    
+        
+        # Tenta conectar
         check, reason = self.api.connect()
-    
-        if check:
-            self.re_subscribe_stream()
-    
-            while global_value.balance_id is None:
-                time.sleep(0.1)
-    
-            self.position_change_all("subscribeMessage", global_value.balance_id)
-            self.order_changed_all("subscribeMessage")
-            self.api.setOptions(1, True)
-    
-            return True, None
-        else:
-            if reason and isinstance(reason, str):
-                try:
-                    reason_data = json.loads(reason)
-                    if reason_data.get("code") == "verify":
-                        response = self.api.send_sms_code(reason_data["token"])
-                        if response.json()["code"] != "success":
-                            return False, response.json()["message"]
-    
-                        self.resp_sms = response
-                        return False, "2FA"
-                except json.JSONDecodeError:
-                    logging.error("Resposta inválida recebida durante a conexão.")
+        if not check:
+            logging.error(f"Falha ao conectar: {reason}")
             return False, reason
+    
+        logging.info("Conexão estabelecida com sucesso.")
+        return True, None
     
     def get_server_timestamp(self):
         """
@@ -261,19 +245,18 @@ class IQ_Option:
         """
         data = json.dumps({"name": name, "msg": msg, "request_id": request_id})
         try:
-            # Verifica se o WebSocket está ativo antes de enviar
+            # Verifica se o WebSocket está ativo
             if not self.check_connect():
                 logging.warning("WebSocket inativo. Tentando reconectar...")
                 self.connect()
-
-            # Envia o dado pelo WebSocket
+    
+            # Envia os dados pelo WebSocket
             self.api.websocket.send(data)
         except WebSocketConnectionClosedException:
-            logging.error("Conexão WebSocket já encerrada. Reconectando...")
+            logging.warning("Conexão WebSocket encerrada. Tentando reconectar...")
             self.reconnect_and_retry(data)
         except Exception as e:
-            logging.error(f"Erro ao enviar a solicitação WebSocket: {e}")
-            raise
+            logging.error(f"Erro ao enviar dados pelo WebSocket: {e}")
                         
     def get_all_ACTIVES_OPCODE(self):
         """
@@ -1769,23 +1752,32 @@ class IQ_Option:
         Tenta reconectar e reenviar os dados após uma desconexão.
         """
         try:
-            self.connect()
+            # Reconecta o WebSocket
+            success, reason = self.connect()
+            if not success:
+                logging.error(f"Reconexão falhou: {reason}")
+                return
+    
+            # Reenvia os dados se a reconexão for bem-sucedida
             if self.check_connect():
                 self.api.websocket.send(data)
             else:
-                logging.error("Reconexão falhou. WebSocket continua inativo.")
+                logging.error("WebSocket ainda inativo após a reconexão.")
         except Exception as e:
-            logging.error(f"Erro ao tentar reconectar e reenviar: {e}")
-
+            logging.error(f"Erro ao tentar reconectar e reenviar: {e}")    
+    
     def monitor_websocket(self):
         """
-        Monitora e reconecta automaticamente se o WebSocket estiver desconectado.
+        Monitora o WebSocket e tenta reconectar automaticamente.
         """
         while True:
-            if not self.check_connect():
-                logging.warning("WebSocket desconectado. Tentando reconectar...")
-                self.connect()
-            time.sleep(10)  # Verifica o status do WebSocket a cada 10 segundos
+            try:
+                if not self.check_connect():
+                    logging.warning("WebSocket desconectado. Tentando reconectar...")
+                    self.connect()
+            except Exception as e:
+                logging.error(f"Erro ao monitorar o WebSocket: {e}")
+            time.sleep(10)  # Intervalo de 10 segundos entre verificações
                 
     def get_strike_list(self, ACTIVES, duration):
         """
