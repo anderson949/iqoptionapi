@@ -51,31 +51,31 @@ class IQ_Option:
         self.SESSION_COOKIE = {}
  
         self.OPEN_TIME = nested_dict(3, dict)
-        threading.Thread(target=self.monitor_websocket, daemon=True).start()
+        self.thread_monitoring = None
 
-    def connect(self, sms_code=None):
+    def connect(self):
         """
         Estabelece uma conexão com a API da IQ Option.
         """
         try:
-            # Fecha a conexão anterior, se existir
+            # Fecha a conexão existente, se necessário
             if self.api and hasattr(self.api, "close"):
                 self.api.close()
         except Exception as e:
             logging.warning(f"Falha ao fechar a conexão anterior: {e}")
-    
-        # Inicializa a API
+
+        # Reinstancia o WebSocket
         self.api = IQOptionAPI("iqoption.com", self.email, self.password)
-    
-        # Configurações adicionais e conexão
+
         try:
             self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
             connected, reason = self.api.connect()
-            if not connected:
+            if connected:
+                logging.info("Conexão com a API estabelecida.")
+                return True
+            else:
                 logging.error(f"Erro ao conectar: {reason}")
                 return False
-            logging.info("Conexão estabelecida com sucesso.")
-            return True
         except Exception as e:
             logging.error(f"Erro ao inicializar a API: {e}")
             return False
@@ -144,7 +144,18 @@ class IQ_Option:
         """
         self.SESSION_HEADER = header
         self.SESSION_COOKIE = cookie      
-        
+
+    def is_internet_available(self, host="8.8.8.8", port=53, timeout=3):
+        """
+        Verifica se há conexão com a internet tentando alcançar um servidor DNS público.
+        """
+        try:
+            socket.setdefaulttimeout(timeout)
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+            return True
+        except Exception:
+            return False        
+                        
     def connect(self, sms_code=None):
         """
         Estabelece uma conexão com a API da IQ Option.
@@ -883,41 +894,34 @@ class IQ_Option:
             
     def get_candles(self, ACTIVES, interval, count, endtime):
         """
-        Obtém os candles históricos para um ativo específico.
-    
-        Este método consulta a API para obter os candles históricos com base no ativo, intervalo,
-        quantidade e tempo de fim especificados. Se o ativo não for encontrado ou ocorrer um erro,
-        ele tenta reconectar à API.
-    
-        Parâmetros:
-        ACTIVES (str): Nome do ativo (ex: "EURUSD").
-        interval (int): Intervalo dos candles em segundos.
-        count (int): Número de candles a serem obtidos.
-        endtime (int): Timestamp de fim dos candles.
-    
-        Retorno:
-        list: Lista de candles históricos.
+        Obtém os candles históricos para um ativo específico, reconectando se necessário.
         """
-        self.api.candles.candles_data = None
-    
         while True:
             try:
-                if ACTIVES not in OP_code.ACTIVES:
-                    logging.warning(f"Ativo '{ACTIVES}' não encontrado nos consts.")
-                    break
-    
-                self.api.getcandles(OP_code.ACTIVES[ACTIVES], interval, count, endtime)
-    
-                while self.check_connect() and self.api.candles.candles_data is None:
-                    time.sleep(0.1)  # Evita o uso excessivo da CPU
-    
-                if self.api.candles.candles_data is not None:
-                    break
+                if not self.is_internet_available():
+                    logging.warning("Sem conexão com a internet. Aguardando reconexão...")
+                    time.sleep(5)
+                    continue
+
+                if not check_websocket_if_connect():
+                    logging.warning("WebSocket desconectado. Tentando reconectar...")
+                    self.connect()
+
+                self.api.candles.candles_data = None
+                self.api.getcandles(ACTIVES, interval, count, endtime)
+
+                # Aguarda a resposta ou reconecta em caso de falha
+                start_time = time.time()
+                while not self.api.candles.candles_data:
+                    if time.time() - start_time > 10:  # Timeout de 10 segundos
+                        logging.warning("Timeout ao obter candles. Tentando novamente...")
+                        raise Exception("Timeout")
+                    time.sleep(0.1)
+
+                return self.api.candles.candles_data
             except Exception as e:
                 logging.error(f"Erro ao obter candles: {e}. Tentando reconectar...")
                 self.connect()
-    
-        return self.api.candles.candles_data        
         
     def start_candles_stream(self, ACTIVE, size, maxdict):
         """
@@ -1764,23 +1768,53 @@ class IQ_Option:
     def monitor_websocket(self):
         """
         Monitora o WebSocket e tenta reconectar automaticamente.
+        Garante que a internet esteja disponível antes de reconectar.
         """
-        while True:
+        max_retries = 10000  # Máximo de tentativas de reconexão
+        retries = 0
+
+        while retries < max_retries:
             try:
-                # Verifica se `self.api` e `self.api.websocket` estão inicializados
-                if not self.api or not hasattr(self.api, "websocket") or not self.api.websocket:
-                    logging.warning("WebSocket não inicializado. Aguardando inicialização...")
-                    time.sleep(5)  # Aguarda antes de verificar novamente
+                # Verifica a conectividade com a internet
+                if not self.is_internet_available():
+                    logging.warning("Sem conexão com a internet. Aguardando reconexão...")
+                    time.sleep(5)
                     continue
-    
-                # Verifica o estado da conexão
-                if not self.check_connect():
+
+                # Verifica se o WebSocket foi inicializado
+                if not self.api or not hasattr(self.api, "websocket") or not self.api.websocket:
+                    logging.warning("WebSocket não inicializado. Tentando reconectar...")
+                    if self.connect():
+                        retries = 0  # Zera o contador após sucesso
+                    else:
+                        retries += 1
+                    continue
+
+                # Verifica se o WebSocket está conectado
+                if not check_websocket_if_connect():
                     logging.warning("WebSocket desconectado. Tentando reconectar...")
-                    self.connect()
+                    if self.connect():
+                        retries = 0  # Zera o contador após sucesso
+                    else:
+                        retries += 1
+                    continue
             except Exception as e:
                 logging.error(f"Erro ao monitorar o WebSocket: {e}")
+                retries += 1
+
             time.sleep(10)  # Intervalo entre as verificações
-                
+
+        logging.error(f"Falha ao reconectar após {max_retries} tentativas. Encerrando monitoramento.")
+
+    def start_monitoring(self):
+        """
+        Inicia o monitoramento do WebSocket em uma thread separada.
+        """
+        if not self.thread_monitoring:
+            self.thread_monitoring = threading.Thread(target=self.monitor_websocket, daemon=True)
+            self.thread_monitoring.start()
+            logging.info("Monitoramento do WebSocket iniciado em uma thread separada.")
+                                                                
     def get_strike_list(self, ACTIVES, duration):
         """
         Obtém a lista de strikes (preços de exercício) para um ativo e duração específicos.
