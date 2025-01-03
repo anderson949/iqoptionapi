@@ -1731,19 +1731,20 @@ class IQ_Option:
         
     def start_heartbeat(self):
         """
-        Inicia um "heartbeat" para manter a conexão WebSocket ativa.
+        Envia sinais periódicos para manter a conexão ativa.
         """
         def heartbeat():
             while True:
                 try:
-                    if not self.websocket_alive():
-                        logging.warning("WebSocket inativo. Tentando reconectar...")
+                    if not self.check_connect():
+                        logging.warning("Conexão inativa. Tentando reconectar...")
                         self.connect()
-                    self.heartbeat()  # Envia um ping ao servidor
+                    else:
+                        self.api.ping()  # Envia ping ao servidor
                     time.sleep(30)
                 except Exception as e:
                     logging.error(f"Erro no heartbeat: {e}")
-        
+    
         threading.Thread(target=heartbeat, daemon=True).start()
         
     def reconnect_and_retry(self, data):
@@ -1770,41 +1771,41 @@ class IQ_Option:
         Monitora o WebSocket e tenta reconectar automaticamente.
         Garante que a internet esteja disponível antes de reconectar.
         """
-        max_retries = 10000  # Máximo de tentativas de reconexão
+        max_retries = 10  # Limita tentativas antes de um erro crítico
         retries = 0
-
+    
         while retries < max_retries:
             try:
-                # Verifica a conectividade com a internet
+                # Verifica conectividade com a internet
                 if not self.is_internet_available():
-                    logging.warning("Sem conexão com a internet. Aguardando reconexão...")
+                    logging.warning("Sem conexão com a internet. Tentando reconectar em 5 segundos...")
                     time.sleep(5)
                     continue
-
-                # Verifica se o WebSocket foi inicializado
+    
+                # Verifica estado do WebSocket
                 if not self.api or not hasattr(self.api, "websocket") or not self.api.websocket:
-                    logging.warning("WebSocket não inicializado. Tentando reconectar...")
+                    logging.warning("WebSocket inativo ou não inicializado. Reconectando...")
                     if self.connect():
                         retries = 0  # Zera o contador após sucesso
                     else:
                         retries += 1
                     continue
-
-                # Verifica se o WebSocket está conectado
-                if not check_websocket_if_connect():
+    
+                # Verifica conexão do WebSocket
+                if not self.check_connect():
                     logging.warning("WebSocket desconectado. Tentando reconectar...")
                     if self.connect():
-                        retries = 0  # Zera o contador após sucesso
+                        retries = 0
                     else:
                         retries += 1
                     continue
             except Exception as e:
-                logging.error(f"Erro ao monitorar o WebSocket: {e}")
+                logging.error(f"Erro no monitoramento do WebSocket: {e}")
                 retries += 1
-
-            time.sleep(10)  # Intervalo entre as verificações
-
-        logging.error(f"Falha ao reconectar após {max_retries} tentativas. Encerrando monitoramento.")
+    
+            time.sleep(10)  # Verificações a cada 10 segundos
+    
+        logging.critical(f"Reconexão falhou após {max_retries} tentativas. Encerrando monitoramento.")
 
     def start_monitoring(self):
         """
