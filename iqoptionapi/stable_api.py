@@ -146,9 +146,6 @@ class IQ_Option:
         self.SESSION_COOKIE = cookie      
 
     def is_internet_available(self, hosts=["8.8.8.8", "1.1.1.1"], port=53, timeout=3):
-        """
-        Verifica conectividade com a internet testando múltiplos servidores DNS.
-        """
         import socket
         for host in hosts:
             try:
@@ -157,6 +154,7 @@ class IQ_Option:
                 return True
             except Exception:
                 continue  # Tenta o próximo host
+        logging.warning("Nenhum servidor DNS acessível. Sem conexão com a internet.")
         return False
                         
     def connect(self):
@@ -853,35 +851,43 @@ class IQ_Option:
             exit(1)
             
     def get_candles(self, ACTIVES, interval, count, endtime):
-        """
-        Obtém os candles históricos para um ativo específico, reconectando se necessário.
-        """
-        while True:
+        max_retries = 5
+        retries = 0
+    
+        while retries < max_retries:
             try:
                 if not self.is_internet_available():
-                    logging.warning("Sem conexão com a internet. Aguardando reconexão...")
+                    logging.warning("Sem conexão com a internet. Tentando novamente...")
                     time.sleep(5)
+                    retries += 1
                     continue
-
-                if not check_websocket_if_connect():
+    
+                if not self.check_connect():
                     logging.warning("WebSocket desconectado. Tentando reconectar...")
-                    self.connect()
-
+                    if not self.connect():
+                        retries += 1
+                        continue
+    
                 self.api.candles.candles_data = None
                 self.api.getcandles(ACTIVES, interval, count, endtime)
-
-                # Aguarda a resposta ou reconecta em caso de falha
+    
+                # Aguarda os dados com timeout
                 start_time = time.time()
                 while not self.api.candles.candles_data:
                     if time.time() - start_time > 10:  # Timeout de 10 segundos
-                        logging.warning("Timeout ao obter candles. Tentando novamente...")
-                        raise Exception("Timeout")
+                        raise TimeoutError("Timeout ao obter candles")
                     time.sleep(0.1)
-
+    
                 return self.api.candles.candles_data
+            except TimeoutError as te:
+                logging.warning(f"Tentativa {retries + 1}/{max_retries} falhou: {te}")
+                retries += 1
             except Exception as e:
-                logging.error(f"Erro ao obter candles: {e}. Tentando reconectar...")
-                self.connect()
+                logging.error(f"Erro ao obter candles: {e}")
+                retries += 1
+    
+        logging.critical("Falha ao obter candles após múltiplas tentativas.")
+        return None
         
     def start_candles_stream(self, ACTIVE, size, maxdict):
         """
@@ -1727,28 +1733,27 @@ class IQ_Option:
             logging.error(f"Erro ao tentar reconectar e reenviar: {e}")    
     
     def monitor_websocket(self):
-        """
-        Monitora o WebSocket e tenta reconectar com backoff exponencial.
-        """
         retries = 0
         max_retries = 10
-        backoff = 2  # Tempo inicial de espera
+        backoff = 2  # Tempo inicial de espera (segundos)
     
         while retries < max_retries:
             try:
+                # Verifica conectividade com a internet
                 if not self.is_internet_available():
-                    logging.warning("Sem conexão com a internet. Tentando novamente em 5 segundos...")
+                    logging.warning("Sem conexão com a internet. Tentando novamente...")
                     time.sleep(5)
                     continue
     
+                # Verifica estado do WebSocket
                 if not self.check_connect():
                     logging.warning("WebSocket desconectado. Tentando reconectar...")
                     if self.connect():
                         retries = 0
                     else:
                         retries += 1
-                        time.sleep(min(backoff, 60))  # Aumenta o backoff até 1 minuto
-                        backoff *= 2  # Backoff exponencial
+                        time.sleep(min(backoff, 60))  # Máximo de 1 minuto
+                        backoff *= 2  # Aumenta o backoff exponencialmente
                     continue
             except Exception as e:
                 logging.error(f"Erro no monitoramento: {e}")
@@ -1761,13 +1766,10 @@ class IQ_Option:
         logging.critical(f"Falha ao reconectar após {max_retries} tentativas.")
 
     def start_monitoring(self):
-        """
-        Inicia o monitoramento do WebSocket em uma thread separada.
-        """
         if not self.thread_monitoring:
             self.thread_monitoring = threading.Thread(target=self.monitor_websocket, daemon=True)
             self.thread_monitoring.start()
-            logging.info("Monitoramento do WebSocket iniciado em uma thread separada.")
+            logging.info("Monitoramento do WebSocket iniciado.")
                                                                 
     def get_strike_list(self, ACTIVES, duration):
         """
