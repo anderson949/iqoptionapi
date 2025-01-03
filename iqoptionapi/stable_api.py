@@ -54,31 +54,33 @@ class IQ_Option:
         self.thread_monitoring = None
 
     def connect(self):
-        """
-        Estabelece uma conexão com a API da IQ Option.
-        """
-        try:
-            # Fecha a conexão existente, se necessário
-            if self.api and hasattr(self.api, "close"):
-                self.api.close()
-        except Exception as e:
-            logging.warning(f"Falha ao fechar a conexão anterior: {e}")
-
-        # Reinstancia o WebSocket
-        self.api = IQOptionAPI("iqoption.com", self.email, self.password)
-
-        try:
-            self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
-            connected, reason = self.api.connect()
-            if connected:
-                logging.info("Conexão com a API estabelecida.")
-                return True
-            else:
-                logging.error(f"Erro ao conectar: {reason}")
-                return False
-        except Exception as e:
-            logging.error(f"Erro ao inicializar a API: {e}")
-            return False
+        import time
+        max_attempts = 5
+        attempt = 0
+        backoff = 5  # Initial delay in seconds
+    
+        while attempt < max_attempts:
+            try:
+                if self.api and hasattr(self.api, "close"):
+                    self.api.close()
+                self.api = IQOptionAPI("iqoption.com", self.email, self.password)
+                self.api.set_session(headers=self.SESSION_HEADER, cookies=self.SESSION_COOKIE)
+                connected, reason = self.api.connect()
+                if connected:
+                    logging.info("Connection reestablished.")
+                    self.re_subscribe_stream()
+                    return True
+                else:
+                    logging.error(f"Connection failed: {reason}")
+            except Exception as e:
+                logging.error(f"Error reconnecting: {e}")
+            attempt += 1
+            if attempt < max_attempts:
+                sleep_time = backoff * (2 ** (attempt - 1))
+                logging.info(f"Retrying in {sleep_time} seconds...")
+                time.sleep(sleep_time)
+        logging.error("Max reconnection attempts reached. Unable to connect.")
+        return False
     
     def get_server_timestamp(self):
         """
@@ -149,12 +151,12 @@ class IQ_Option:
         import socket
         for host in hosts:
             try:
-                socket.setdefaulttimeout(timeout)
-                socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
-                return True
-            except Exception:
-                continue  # Tenta o próximo host
-        logging.warning("Nenhum servidor DNS acessível. Sem conexão com a internet.")
+                with socket.create_connection((host, port), timeout=timeout) as sock:
+                    return True
+            except (socket.timeout, OSError) as e:
+                logging.error(f"Connection to {host} failed: {e}")
+                continue  # Try next host
+        logging.warning("No internet connection available.")
         return False
                         
     def connect(self):
@@ -210,24 +212,19 @@ class IQ_Option:
         return False
 
     def send_websocket_request(self, name, msg, request_id="", no_force_send=True):
-        """
-        Envia uma solicitação WebSocket ao servidor IQ Option.
-        Reconecta automaticamente se a conexão WebSocket estiver fechada.
-        """
         data = json.dumps({"name": name, "msg": msg, "request_id": request_id})
         try:
-            # Verifica se o WebSocket está ativo
             if not self.check_connect():
-                logging.warning("WebSocket inativo. Tentando reconectar...")
-                self.connect()
-    
-            # Envia os dados pelo WebSocket
+                logging.warning("WebSocket connection closed. Attempting to reconnect...")
+                if not self.connect():
+                    logging.error("Reconnection failed. Unable to send request.")
+                    return
             self.api.websocket.send(data)
         except WebSocketConnectionClosedException:
-            logging.warning("Conexão WebSocket encerrada. Tentando reconectar...")
-            self.reconnect_and_retry(data)
+            logging.warning("WebSocket connection closed. Reconnecting...")
+            self.connect()
         except Exception as e:
-            logging.error(f"Erro ao enviar dados pelo WebSocket: {e}")
+            logging.error(f"Error sending data via WebSocket: {e}")
                         
     def get_all_ACTIVES_OPCODE(self):
         """
