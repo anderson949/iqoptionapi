@@ -1,3 +1,4 @@
+#
 # python
 from iqoptionapi.api import IQOptionAPI
 import iqoptionapi.constants as OP_code
